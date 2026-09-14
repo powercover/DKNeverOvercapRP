@@ -1,0 +1,12 @@
+## Interface: 120105
+## Title: BDK Never Overcap RP
+## Notes: Blood Death Knight runic power cap overlay
+## Author: powercover
+## Version: 1.0.0
+## SavedVariables: BDKNORP_DB
+## IconTexture: Interface\Icons\spell_deathknight_deathstrike
+
+Core.lua
+Display.lua
+Config.lua
+Options.lua
