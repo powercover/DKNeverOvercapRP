@@ -10,20 +10,6 @@ local anchor
 local driver
 local displayAlpha = 0
 
-local sampleElapsed = 0
-local lastSoundAt = 0
-local wasOverlayActive = false
-
-local function PlayCapSound()
-  if GetTime() - lastSoundAt < 1.5 then
-    return
-  end
-  lastSoundAt = GetTime()
-  if PlaySoundFile then
-    PlaySoundFile(8959, "Master")
-  end
-end
-
 local function CreateAlert(parent, textureID, layer, blend)
   local tex = parent:CreateTexture(nil, layer or "OVERLAY")
   tex:SetTexture(textureID)
@@ -47,26 +33,6 @@ end
 local function ShouldShowOverlay()
   local db = ns.EnsureDB()
   return db.enabled and ns.IsBloodDeathKnight()
-end
-
-local function UpdateSound()
-  local db = ns.EnsureDB()
-  if not db.playSound or not ShouldShowOverlay() then
-    wasOverlayActive = false
-    return
-  end
-
-  local current, max = ns.GetRunicPower()
-  local intensity = ns.GetAccessibleOverlayIntensity(current, max, db)
-  if intensity == nil then
-    return
-  end
-
-  local active = intensity > 0.02
-  if active and not wasOverlayActive then
-    PlayCapSound()
-  end
-  wasOverlayActive = active
 end
 
 local function LayoutOverlay()
@@ -172,11 +138,6 @@ local function ApplyOverlayVisual(elapsed)
 end
 
 local function OnDriverUpdate(_, elapsed)
-  sampleElapsed = sampleElapsed + elapsed
-  if sampleElapsed >= 0.05 then
-    sampleElapsed = 0
-    UpdateSound()
-  end
   ApplyOverlayVisual(elapsed)
 end
 
@@ -232,19 +193,16 @@ loader:SetScript("OnEvent", function(_, event, unit)
     CreateOverlayUI()
     driver = CreateFrame("Frame")
     driver:SetScript("OnUpdate", OnDriverUpdate)
-    UpdateSound()
     ApplyOverlayVisual(0.016)
     return
   end
   if event == "UNIT_POWER_UPDATE" and unit ~= "player" then
     return
   end
-  UpdateSound()
   ApplyOverlayVisual(0.016)
 end)
 
 ns.RefreshDisplay = function()
-  UpdateSound()
   ApplyOverlayVisual(0.016)
 end
 

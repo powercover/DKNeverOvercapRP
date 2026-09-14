@@ -214,7 +214,7 @@ local function CreateMinimapButton()
   minimapButton:SetSize(32, 32)
   minimapButton:SetFrameStrata("MEDIUM")
   minimapButton:SetFrameLevel(8)
-  minimapButton:RegisterForClicks("LeftButtonUp")
+  minimapButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
   minimapButton:RegisterForDrag("LeftButton")
   minimapButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
@@ -228,14 +228,38 @@ local function CreateMinimapButton()
   icon:SetPoint("CENTER", -1, 1)
   icon:SetTexture("Interface\\Icons\\spell_deathknight_deathstrike")
   icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+  minimapButton.icon = icon
 
-  minimapButton:SetScript("OnClick", function()
+  local function UpdateMinimapIcon()
+    local enabled = ns.EnsureDB().enabled
+    if minimapButton.icon then
+      minimapButton.icon:SetDesaturated(not enabled)
+      if enabled then
+        minimapButton.icon:SetVertexColor(1, 1, 1)
+      else
+        minimapButton.icon:SetVertexColor(0.55, 0.55, 0.55)
+      end
+    end
+  end
+
+  function ns.RefreshMinimapButton()
+    UpdateMinimapIcon()
+  end
+
+  minimapButton:SetScript("OnClick", function(_, button)
+    if button == "RightButton" then
+      local enabled = ns.SetAddonEnabled(not ns.EnsureDB().enabled)
+      ns.Print(enabled and "enabled" or "disabled")
+      return
+    end
     ns.ToggleOptions()
   end)
   minimapButton:SetScript("OnEnter", function(self)
+    local enabled = ns.EnsureDB().enabled
     GameTooltip:SetOwner(self, "ANCHOR_LEFT")
     GameTooltip:AddLine("BDK Never Overcap RP", 0.85, 0.18, 0.22)
-    GameTooltip:AddLine("Click to open settings", 1, 1, 1)
+    GameTooltip:AddLine("Left-click: settings", 1, 1, 1)
+    GameTooltip:AddLine("Right-click: " .. (enabled and "disable" or "enable"), 1, 1, 1)
     GameTooltip:AddLine("Drag to move", 0.7, 0.7, 0.7)
     GameTooltip:Show()
   end)
@@ -257,6 +281,7 @@ local function CreateMinimapButton()
   end)
 
   UpdateMinimapPosition()
+  UpdateMinimapIcon()
 end
 
 local loader = CreateFrame("Frame")

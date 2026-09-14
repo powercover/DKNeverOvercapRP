@@ -16,7 +16,6 @@ ns.DEFAULTS = {
   warnAt = 80,
   criticalAt = 90,
   powerMaxFallback = 125,
-  playSound = true,
   settingsRev = 1,
 }
 
@@ -101,6 +100,18 @@ function ns.SetOverlayAtPercent(percent)
     ns.RefreshDisplay()
   end
   return db.overlayAtPercent
+end
+
+function ns.SetAddonEnabled(enabled)
+  local db = ns.EnsureDB()
+  db.enabled = enabled and true or false
+  if ns.RefreshDisplay then
+    ns.RefreshDisplay()
+  end
+  if ns.RefreshMinimapButton then
+    ns.RefreshMinimapButton()
+  end
+  return db.enabled
 end
 
 function ns.SetTextureKey(key)

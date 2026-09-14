@@ -5,7 +5,6 @@ local function PrintHelp()
   ns.Print("/bnorp status")
   ns.Print("/bnorp on | off")
   ns.Print("/bnorp overlay <percent>  (default 85)")
-  ns.Print("/bnorp sound on | off")
   ns.Print("/bnorp config")
 end
 
@@ -26,36 +25,32 @@ local function HandleSlash(msg)
     local active = ns.IsBloodDeathKnight() and db.enabled
     if ns.CanAccessPowerNumber(current) then
       ns.Print(string.format(
-        "active=%s rp=%d/%d overlay=%d%% sound=%s",
+        "active=%s rp=%d/%d overlay=%d%%",
         active and "yes" or "no",
         current,
         maxDisplay,
-        db.overlayAtPercent,
-        db.playSound and "on" or "off"
+        db.overlayAtPercent
       ))
     else
       ns.Print(string.format(
-        "active=%s rp=hidden/%d overlay=%d%% sound=%s (combat-safe)",
+        "active=%s rp=hidden/%d overlay=%d%% (combat-safe)",
         active and "yes" or "no",
         maxDisplay,
-        db.overlayAtPercent,
-        db.playSound and "on" or "off"
+        db.overlayAtPercent
       ))
     end
     return
   end
 
   if cmd == "on" then
-    db.enabled = true
+    ns.SetAddonEnabled(true)
     ns.Print("enabled")
-    ns.RefreshDisplay()
     return
   end
 
   if cmd == "off" then
-    db.enabled = false
+    ns.SetAddonEnabled(false)
     ns.Print("disabled")
-    ns.RefreshDisplay()
     return
   end
 
@@ -75,19 +70,6 @@ local function HandleSlash(msg)
 
   if cmd == "config" or cmd == "options" or cmd == "settings" then
     ns.ToggleOptions()
-    return
-  end
-
-  if cmd == "sound" then
-    if arg == "on" then
-      db.playSound = true
-    elseif arg == "off" then
-      db.playSound = false
-    else
-      ns.Print("usage: /bnorp sound on | off")
-      return
-    end
-    ns.Print("sound " .. (db.playSound and "on" or "off"))
     return
   end
 
