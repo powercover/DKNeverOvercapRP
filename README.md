@@ -4,14 +4,14 @@ A runic power overlay for every Death Knight spec. A glowing rune aura builds ar
 
 ## Features
 
-- Seven custom-drawn patterns: **Rune circle**, **Halo**, **Arcs**, **Sigil** and **Embers** around your character, or **Screen edge** and **Corners** across the screen. Any character pattern can also get a soft screen-edge glow.
+- Custom-drawn patterns in two independent groups: **Around you** (Rune circle, Halo, Arcs, Sigil, Embers) and **Screen** (Edge glow, Corners). Use one from each group, or turn either group off.
 - Soft by default (70% max opacity, gentle colors). Opacity glides with a short ease instead of jumping, and the near-cap pulse is a slow breath rather than a flash.
 - A separate color for each spec: muted Blood red, Frost blue and Unholy green by default, each changeable
 - The aura fades in from a configurable share of max runic power (default **85%**) and reaches full strength at the cap
 - An optional pulse right before you cap (default **95%**)
 - Size, vertical offset, max opacity, motion and smooth-fade settings
 - Optional "only in combat" mode
-- A modern settings page under *Options → AddOns*, with a live **Preview** button
+- A modern settings window with a live **Preview** button. It's a standalone window, so it opens in combat and other UI skins leave it alone.
 - Minimap button: left-click opens the settings, right-click turns the overlay on or off, and you can drag it to move it. It shows only on Death Knights. If another addon has loaded LibDBIcon, the button registers through it, so minimap skins and button bars handle it like any other launcher.
 - Works in combat in Midnight, where runic power is hidden from addons: the client computes the opacity through a curve
 
@@ -22,11 +22,11 @@ The addon does nothing unless it's needed:
 - **Not a Death Knight**: after login it never registers an event, never builds the overlay and never runs an update.
 - **Spec turned off or overlay disabled**: it only listens for spec changes.
 - **Active**: it reacts to the player's runic power events only. Nothing runs every frame. The only frame-by-frame work is a short fade that stops itself once it reaches its target, plus the motion and pulse animations, which the client runs only while the aura is visible.
-- The settings page is built the first time you open it.
+- The settings window is built the first time you open it.
 
 ## Settings
 
-Left-click the minimap button, or open *Game Menu → Options → AddOns → DK Never Overcap RP*.
+Left-click the minimap button, or open *Game Menu → Options → AddOns → DK Never Overcap RP* and click **Open settings**. Press Esc or the × to close the window, and drag it by any empty space to move it.
 
 | Card | Setting | Default |
 |---|---|---|
@@ -36,8 +36,8 @@ Left-click the minimap button, or open *Game Menu → Options → AddOns → DK 
 | Specializations | Blood / Frost / Unholy (on/off and color) | all on |
 | Trigger | Appear at | 85% |
 | | Pulse near cap / Pulse at | on / 95% |
-| Appearance | Pattern | Rune circle |
-| | Screen edge glow | off |
+| Appearance | Around you (None, Rune circle, Halo, Arcs, Sigil, Embers) | Rune circle |
+| | Screen (None, Edge glow, Corners) | None |
 | | Max opacity | 70% |
 | | Size | 100% |
 | | Vertical offset | -20 px |
@@ -56,23 +56,23 @@ python tools/make_textures.py
 
 ## Font
 
-The settings page uses [Inter](https://github.com/rsms/inter) (Regular, Medium and SemiBold) from `Media/Fonts/`. It is licensed under the SIL Open Font License 1.1, and the licence text is in `Media/Fonts/OFL.txt`. Korean and Chinese clients use the game font instead, because Inter doesn't include those scripts.
+The settings window uses [Inter](https://github.com/rsms/inter) (Regular, Medium and SemiBold) from `Media/Fonts/`. It is licensed under the SIL Open Font License 1.1, and the licence text is in `Media/Fonts/OFL.txt`. Korean and Chinese clients use the game font instead, because Inter doesn't include those scripts.
 
 ## Releasing
 
-Releases are built by [BigWigsMods/packager](https://github.com/BigWigsMods/packager) in GitHub Actions (`.github/workflows/release.yml`). Each release lints the code, builds `DKNeverOvercapRP-<version>.zip` with the version in the TOC, writes a changelog from the commits, and publishes a GitHub release.
+Pushing a version tag publishes the addon to CurseForge, Wago and this repository's GitHub releases. This is done by [BigWigsMods/packager](https://github.com/BigWigsMods/packager) in `.github/workflows/release.yml`, the same setup as the other powercover addons.
 
-There are two ways to start a release:
-
-1. **From GitHub**: *Actions → Release → Run workflow*, then enter a version such as `2.1.0`. The workflow creates the `v2.1.0` tag for you.
-2. **From a terminal**: push a tag.
+1. Set `## Version` in `DKNeverOvercapRP.toc` and add a section at the top of `CHANGELOG.md`. Those notes become the release notes.
+2. Commit, then tag and push:
 
    ```bash
-   git tag v2.1.0 && git push origin v2.1.0
+   git tag 2.0.1 && git push origin main 2.0.1
    ```
 
-Tags containing `alpha` or `beta` (for example `v2.1.0-beta.1`) are published as pre-releases.
+A tag with `alpha` or `beta` in its name is published as that kind of file. The workflow lints the code first. The project IDs come from the TOC (`X-Curse-Project-ID`, `X-Wago-ID`), and uploads need the `CF_API_KEY` and `WAGO_API_TOKEN` repository secrets. What goes in the zip is set in `.pkgmeta`; `tools/` and `Listing/` stay out.
 
-**CurseForge and Wago (optional).** Add `## X-Curse-Project-ID: <id>` and/or `## X-Wago-ID: <id>` to the TOC, then add the `CF_API_KEY` and/or `WAGO_API_TOKEN` repository secrets. Without them, the release goes to GitHub only.
+Store page texts and images are in `Listing/` (see `Listing/listing.md`). Every push and pull request also runs luacheck (`.github/workflows/ci.yml`).
 
-Every push and pull request also runs luacheck (`.github/workflows/ci.yml`).
+## License
+
+All Rights Reserved; see [LICENSE](LICENSE). The bundled Inter font is under the SIL Open Font License 1.1 (`Media/Fonts/OFL.txt`).

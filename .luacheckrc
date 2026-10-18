@@ -9,6 +9,7 @@ globals = {
 
 read_globals = {
   -- Lua extensions
+  "tinsert",
   "wipe",
   -- Midnight secret values
   "canaccessvalue",
@@ -43,4 +44,5 @@ read_globals = {
   "SOUNDKIT",
   "STANDARD_TEXT_FONT",
   "UIParent",
+  "UISpecialFrames",
 }

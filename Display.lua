@@ -12,9 +12,10 @@ local EPSILON = 0.0001
 -- Aura diameter as a share of the screen height at 100% size.
 local AURA_SIZE = 0.55
 
--- Layers per pattern. size: relative to the aura; alpha: layer strength;
--- light: tinted toward white; spin: seconds per turn (negative = reverse);
--- flicker: gentle breathing; screen: stretched over the whole screen.
+-- Layers per pattern (keys of ns.AURAS and ns.SCREENS). size: relative to
+-- the aura; alpha: layer strength; light: tinted toward white; spin:
+-- seconds per turn (negative = reverse); flicker: gentle breathing;
+-- screen: stretched over the whole screen.
 local LAYERS = {
   runes = {
     { file = "glow", size = 1.25, alpha = 0.30, layer = "BACKGROUND" },
@@ -263,9 +264,12 @@ function ns.LayoutOverlay()
 end
 
 local function ActivePatterns()
-  local keys = { ns.db.pattern }
-  if ns.db.edgeGlow and not ns.GetPattern(ns.db.pattern).screen then
-    keys[2] = "edge"
+  local keys = {}
+  if ns.db.aura ~= "none" then
+    keys[#keys + 1] = ns.db.aura
+  end
+  if ns.db.screen ~= "none" then
+    keys[#keys + 1] = ns.db.screen
   end
   return keys
 end

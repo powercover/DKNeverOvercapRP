@@ -1,15 +1,17 @@
 local addonName, ns = ...
 
--- Settings page under Options > AddOns. Every control is drawn from plain
--- textures (no Blizzard widget templates) with the bundled Inter font.
+-- Settings window. Every control is drawn from plain textures (no
+-- Blizzard widget templates) with the bundled Inter font.
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local MARGIN = 16
 local GAP = 12
 local HEADER_HEIGHT = 68
+local WINDOW_WIDTH = 640
 
 -- Opaque colors only: translucent fills show seams where shapes meet.
 local THEME = {
+  window = { 0.055, 0.055, 0.063 },
   card = { 0.098, 0.098, 0.110 },
   border = { 0.165, 0.165, 0.180 },
   hover = { 0.130, 0.130, 0.145 },
@@ -20,7 +22,7 @@ local THEME = {
   muted = { 0.560, 0.565, 0.610 },
 }
 
-local panel, content
+local window, content
 local controls = {}
 
 local function Accent()
@@ -391,13 +393,14 @@ function Card:Slider(label, tooltip, key, format, isEnabled)
   return Track(row)
 end
 
-local TILE_COLUMNS = 4
+local TILE_COLUMNS = 3
 local TILE_HEIGHT = 56
 local TILE_GAP = 6
 
-function Card:Patterns(label)
-  local rows = math.ceil(#ns.PATTERNS / TILE_COLUMNS)
-  local row = self:Row(26 + rows * TILE_HEIGHT + (rows - 1) * TILE_GAP + 8, label, nil, false)
+-- A grid of choice tiles for `key`, each with a small tinted preview.
+function Card:Tiles(label, tooltip, options, key, screen)
+  local lines = math.ceil(#options / TILE_COLUMNS)
+  local row = self:Row(26 + lines * TILE_HEIGHT + (lines - 1) * TILE_GAP + 8, label, tooltip, false)
   local text = Text(row, FONT.label, THEME.text)
   text:SetPoint("TOPLEFT", 8, -6)
   text:SetText(label)
@@ -407,44 +410,48 @@ function Card:Patterns(label)
   grid:SetPoint("BOTTOMRIGHT", -8, 8)
 
   local tiles = {}
-  for i, pattern in ipairs(ns.PATTERNS) do
+  for i, option in ipairs(options) do
     local tile = CreateFrame("Button", nil, grid)
     tile:SetHeight(TILE_HEIGHT)
     tile.fill, tile.border = Box(tile, 6, THEME.well, THEME.border)
 
-    local icon = tile:CreateTexture(nil, "ARTWORK")
-    icon:SetTexture(ns.MEDIA .. pattern.icon)
-    icon:SetBlendMode("ADD")
-    if pattern.screen then
-      icon:SetSize(40, 24)
-      -- A small "screen" behind the icon.
-      NewRounded(tile, 2, "ARTWORK", -1, icon):SetColor(unpack(THEME.border))
-    else
-      icon:SetSize(30, 30)
-    end
-    icon:SetPoint("CENTER", 0, 7)
-    Smooth(icon)
-    tile.icon = icon
-
     local name = Text(tile, FONT.small, THEME.muted)
-    name:SetPoint("BOTTOM", 0, 6)
     name:SetJustifyH("CENTER")
-    name:SetText(pattern.name)
+    name:SetText(option.name)
     tile.name = name
+
+    if option.icon then
+      local icon = tile:CreateTexture(nil, "ARTWORK")
+      icon:SetTexture(ns.MEDIA .. option.icon)
+      icon:SetBlendMode("ADD")
+      if screen then
+        icon:SetSize(40, 24)
+        -- A small "screen" behind the icon.
+        NewRounded(tile, 2, "ARTWORK", -1, icon):SetColor(unpack(THEME.border))
+      else
+        icon:SetSize(30, 30)
+      end
+      icon:SetPoint("CENTER", 0, 7)
+      Smooth(icon)
+      tile.icon = icon
+      name:SetPoint("BOTTOM", 0, 6)
+    else
+      name:SetPoint("CENTER")
+    end
 
     tile:SetScript("OnClick", function()
       PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
-      ns.Set("pattern", pattern.key)
+      ns.Set(key, option.key)
     end)
     tile:SetScript("OnEnter", function()
-      if ns.db.pattern ~= pattern.key then
+      if ns.db[key] ~= option.key then
         tile.fill:SetColor(unpack(THEME.hover))
       end
     end)
     tile:SetScript("OnLeave", function()
       row.Refresh()
     end)
-    tile.key = pattern.key
+    tile.key = option.key
     tiles[i] = tile
   end
 
@@ -469,9 +476,11 @@ function Card:Patterns(label)
     Layout(grid:GetWidth())
     local r, g, b = Accent()
     for _, tile in ipairs(tiles) do
-      local selected = ns.db.pattern == tile.key
-      tile.icon:SetVertexColor(r, g, b)
-      tile.icon:SetAlpha(selected and 1 or 0.6)
+      local selected = ns.db[key] == tile.key
+      if tile.icon then
+        tile.icon:SetVertexColor(r, g, b)
+        tile.icon:SetAlpha(selected and 1 or 0.6)
+      end
       if selected then
         tile.fill:SetColor(unpack(THEME.raised))
         tile.border:SetColor(r * 0.8, g * 0.8, b * 0.8)
@@ -496,11 +505,7 @@ function Card:Spec(specIndex)
   if icon then
     iconTex:SetTexture(icon)
   end
-  iconTex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-  local mask = row:CreateMaskTexture()
-  mask:SetTexture(CircleFile(18), "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-  mask:SetAllPoints(iconTex)
-  iconTex:AddMaskTexture(mask)
+  iconTex:SetTexCoord(0.1, 0.9, 0.1, 0.9)
 
   local text = Text(row, FONT.label, THEME.text)
   text:SetPoint("LEFT", iconTex, "RIGHT", 8, 0)
@@ -553,7 +558,7 @@ function Card:Spec(specIndex)
 end
 
 ---------------------------------------------------------------------------
--- Page
+-- Window
 ---------------------------------------------------------------------------
 
 local function Percent(value)
@@ -574,6 +579,9 @@ function ns.GetStatus()
   if not ns.db.enabled then
     return "Disabled", 1, 0.38, 0.38
   end
+  if ns.db.aura == "none" and ns.db.screen == "none" then
+    return "Nothing to show · pick a pattern", 1, 0.75, 0.25
+  end
   local spec = ns.GetSpecIndex()
   local specName = spec and ns.GetSpecInfo(spec) or "No spec"
   if ns.IsOverlayActive() then
@@ -584,6 +592,29 @@ end
 
 function ns.GetVersionLabel()
   return ns.VERSION == "dev" and "Dev build" or ("v" .. ns.VERSION)
+end
+
+local function CreateCloseButton(parent)
+  local button = CreateFrame("Button", nil, parent)
+  button:SetSize(24, 24)
+  local bg = NewRounded(button, 6, "BACKGROUND"):SetColor(unpack(THEME.hover))
+  bg:SetShown(false)
+  local cross = Text(button, FONT.title, THEME.muted)
+  cross:SetPoint("CENTER", 0, 1)
+  cross:SetJustifyH("CENTER")
+  cross:SetText("×")
+  button:SetScript("OnEnter", function()
+    bg:SetShown(true)
+    cross:SetTextColor(unpack(THEME.text))
+  end)
+  button:SetScript("OnLeave", function()
+    bg:SetShown(false)
+    cross:SetTextColor(unpack(THEME.muted))
+  end)
+  button:SetScript("OnClick", function()
+    parent:Hide()
+  end)
+  return button
 end
 
 local function BuildHeader()
@@ -616,8 +647,11 @@ local function BuildHeader()
   local status = Text(content, FONT.small, THEME.muted)
   status:SetPoint("LEFT", dot, "RIGHT", 6, 0)
 
+  local close = CreateCloseButton(content)
+  close:SetPoint("TOPRIGHT", -10, -10)
+
   local preview = CreateButton(content, "Preview", 84, true)
-  preview:SetPoint("TOPRIGHT", -MARGIN, -MARGIN - 6)
+  preview:SetPoint("TOPRIGHT", -44, -MARGIN - 6)
   preview:SetScript("OnClick", function()
     PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
     ns.SetPreview(not ns.IsPreviewing())
@@ -666,9 +700,13 @@ local function StackCards(cards, left)
   return height
 end
 
+local function HasAura()
+  return ns.db.aura ~= "none"
+end
+
 local function BuildCards()
   local general = NewCard("General")
-  general:Setting("Enable overlay", "Master switch for the aura.", "enabled")
+  general:Setting("Enable overlay", "Master switch for the overlay.", "enabled")
   general:Setting("Only in combat", "Hide the overlay while out of combat.", "combatOnly")
   general:Toggle("Minimap button", "Left-click opens these settings, right-click turns the overlay on or off, drag to move it.", function()
     return not ns.db.minimap.hide
@@ -684,36 +722,30 @@ local function BuildCards()
   specs:Finish()
 
   local trigger = NewCard("Trigger")
-  trigger:Slider("Appear at", "The aura fades in from this share of max runic power and reaches full strength at the cap.", "startPercent", Percent)
-  trigger:Setting("Pulse near cap", "Add a pulsing flare when runic power is about to cap.", "pulse")
+  trigger:Slider("Appear at", "The overlay fades in from this share of max runic power and reaches full strength at the cap.", "startPercent", Percent)
+  trigger:Setting("Pulse near cap", "Add a slow pulse when runic power is about to cap.", "pulse")
   trigger:Slider("Pulse at", "Runic power share at which the pulse starts.", "pulsePercent", Percent, function()
     return ns.db.pulse
   end)
   trigger:Finish()
 
-  local style = NewCard("Appearance")
-  style:Patterns("Pattern")
-  style:Toggle("Screen edge glow", "Also glow softly around the edges of the screen. Available with patterns drawn around the character.", function()
-    return ns.db.edgeGlow
-  end, function(on)
-    ns.Set("edgeGlow", on)
-  end, function()
-    return not ns.GetPattern(ns.db.pattern).screen
-  end)
-  style:Slider("Max opacity", "Opacity at full runic power.", "maxOpacity", Percent)
-  style:Slider("Size", "Size of the aura around your character.", "scale", Percent)
-  style:Slider("Vertical offset", "Move the aura up or down.", "offsetY", Pixels)
-  style:Setting("Motion", "Slowly turn the patterns and let them breathe.", "motion")
-  style:Setting("Smooth fade", "Glide between opacity levels instead of jumping. If the game hides runic power from addons in combat, changes there are instant.", "smooth")
-  style:Finish()
+  local look = NewCard("Appearance")
+  look:Tiles("Around you", "Pattern drawn around your character.", ns.AURAS, "aura")
+  look:Tiles("Screen", "Glow drawn across the screen. Combine it with a pattern around you, or use it alone.", ns.SCREENS, "screen", true)
+  look:Slider("Max opacity", "Opacity at full runic power.", "maxOpacity", Percent)
+  look:Slider("Size", "Size of the pattern around your character.", "scale", Percent, HasAura)
+  look:Slider("Vertical offset", "Move the pattern around your character up or down.", "offsetY", Pixels, HasAura)
+  look:Setting("Motion", "Slowly turn the patterns and let them breathe.", "motion")
+  look:Setting("Smooth fade", "Glide between opacity levels instead of jumping. If the game hides runic power from addons in combat, changes there are instant.", "smooth")
+  look:Finish()
 
   local leftHeight = StackCards({ general, specs, trigger }, true)
-  local rightHeight = StackCards({ style }, false)
+  local rightHeight = StackCards({ look }, false)
   return math.max(leftHeight, rightHeight)
 end
 
 local function RefreshAll()
-  if not panel or not panel.built or not panel:IsVisible() then
+  if not window or not window:IsShown() then
     return
   end
   for _, control in ipairs(controls) do
@@ -721,66 +753,83 @@ local function RefreshAll()
   end
 end
 
--- Built on first open so characters that never look at it pay nothing.
-local function BuildPanel()
-  panel.built = true
+-- A standalone window rather than a page inside Blizzard's settings: it
+-- opens in combat and other addons' settings skins leave it alone. Built
+-- the first time it opens, so characters that never use it pay nothing.
+local function BuildWindow()
+  window = CreateFrame("Frame", addonName .. "Settings", UIParent)
+  window:SetWidth(WINDOW_WIDTH)
+  window:SetPoint("CENTER")
+  window:SetFrameStrata("DIALOG")
+  window:SetToplevel(true)
+  window:SetClampedToScreen(true)
+  window:EnableMouse(true)
+  window:SetMovable(true)
+  window:RegisterForDrag("LeftButton")
+  window:SetScript("OnDragStart", window.StartMoving)
+  window:SetScript("OnDragStop", window.StopMovingOrSizing)
+  window:Hide()
+  tinsert(UISpecialFrames, window:GetName())
+  Box(window, 12, THEME.window, THEME.border)
 
-  local scroll = CreateFrame("ScrollFrame", nil, panel)
-  scroll:SetAllPoints()
-  scroll:EnableMouseWheel(true)
-  scroll:SetScript("OnMouseWheel", function(self, delta)
-    local range = self:GetVerticalScrollRange() or 0
-    self:SetVerticalScroll(math.min(range, math.max(0, self:GetVerticalScroll() - delta * 40)))
+  content = window
+  window.logo = BuildHeader()
+  window:SetHeight(HEADER_HEIGHT + BuildCards() + MARGIN)
+
+  window:SetScript("OnShow", function()
+    PlaySound(SOUNDKIT.IG_CHARACTER_INFO_OPEN)
+    window.logo.spin:Play()
+    RefreshAll()
   end)
-
-  content = CreateFrame("Frame", nil, scroll)
-  scroll:SetScrollChild(content)
-  content:SetWidth(math.max(520, panel:GetWidth() or 0))
-  scroll:SetScript("OnSizeChanged", function(_, width)
-    content:SetWidth(math.max(520, width))
+  window:SetScript("OnHide", function()
+    PlaySound(SOUNDKIT.IG_CHARACTER_INFO_CLOSE)
+    window.logo.spin:Stop()
+    ns.SetPreview(false)
   end)
-
-  panel.logo = BuildHeader()
-  content:SetHeight(HEADER_HEIGHT + BuildCards() + MARGIN)
 end
+
+function ns.ToggleSettings(show)
+  if not window then
+    BuildWindow()
+  end
+  if show == nil then
+    show = not window:IsShown()
+  end
+  window:SetShown(show)
+end
+
+---------------------------------------------------------------------------
+-- Options > AddOns entry
+---------------------------------------------------------------------------
 
 local function RegisterSettingsCategory()
   if not (Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory) then
     return
   end
-  panel = CreateFrame("Frame")
+  local panel = CreateFrame("Frame")
+  local built
   panel:SetScript("OnShow", function()
-    if not panel.built then
-      BuildPanel()
+    if built then
+      return
     end
-    panel.logo.spin:Play()
-    RefreshAll()
+    built = true
+    local title = Text(panel, FONT.title, THEME.text)
+    title:SetPoint("TOPLEFT", 18, -18)
+    title:SetText(ns.TITLE)
+    local about = Text(panel, FONT.small, THEME.muted)
+    about:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
+    about:SetText("Settings live in their own window. You can also open it from the minimap button.")
+    local open = CreateButton(panel, "Open settings", 120, true)
+    open:SetPoint("TOPLEFT", about, "BOTTOMLEFT", 0, -14)
+    open:SetScript("OnClick", function()
+      if SettingsPanel and SettingsPanel:IsShown() then
+        HideUIPanel(SettingsPanel)
+      end
+      ns.ToggleSettings(true)
+    end)
+    open.Refresh()
   end)
-  panel:SetScript("OnHide", function()
-    -- Settings can hide the panel before it is ever shown.
-    if panel.built then
-      panel.logo.spin:Stop()
-    end
-    ns.SetPreview(false)
-  end)
-  -- Called by the settings window's own Defaults button.
-  panel.OnDefault = ns.ResetSettings
-
-  local category = Settings.RegisterCanvasLayoutCategory(panel, ns.TITLE)
-  Settings.RegisterAddOnCategory(category)
-  ns.settingsCategory = category
-end
-
--- Opens the settings page, or closes the settings window if it is showing it.
-function ns.ToggleSettings()
-  if not ns.settingsCategory then
-    return
-  end
-  if SettingsPanel and SettingsPanel:IsShown() and panel:IsVisible() then
-    HideUIPanel(SettingsPanel)
-    return
-  end
-  Settings.OpenToCategory(ns.settingsCategory:GetID())
+  Settings.RegisterAddOnCategory(Settings.RegisterCanvasLayoutCategory(panel, ns.TITLE))
 end
 
 ns.OnChange(RefreshAll)

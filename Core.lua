@@ -3,6 +3,7 @@ local addonName, ns = ...
 ns.ADDON_NAME = addonName
 ns.TITLE = "DK Never Overcap RP"
 ns.MEDIA = "Interface\\AddOns\\" .. addonName .. "\\Media\\"
+ns.ICON = "Interface\\AddOns\\" .. addonName .. "\\Icon"
 
 do
   local version = C_AddOns.GetAddOnMetadata(addonName, "Version")
@@ -19,26 +20,33 @@ ns.POWER_TOKEN = "RUNIC_POWER"
 -- Opacity the aura has at the moment it first appears (scaled by max opacity).
 ns.START_ALPHA = 0.15
 
-ns.DB_VERSION = 1
+ns.DB_VERSION = 2
 
--- Overlay patterns in picker order. `screen` patterns cover the whole
--- screen; the rest are drawn around the character. Layers live in Display.
-ns.PATTERNS = {
+-- Overlay choices in picker order: one pattern drawn around the character
+-- and one across the screen, either of which can be off. Layers live in
+-- Display. `icon` is the texture shown on the picker tile.
+ns.AURAS = {
+  { key = "none", name = "None" },
   { key = "runes", name = "Rune circle", icon = "runes" },
   { key = "halo", name = "Halo", icon = "glow" },
   { key = "arcs", name = "Arcs", icon = "arcs_inner" },
   { key = "sigil", name = "Sigil", icon = "sigil" },
   { key = "embers", name = "Embers", icon = "embers" },
-  { key = "edge", name = "Screen edge", icon = "edge", screen = true },
-  { key = "corners", name = "Corners", icon = "corners", screen = true },
 }
 
-function ns.GetPattern(key)
-  for _, pattern in ipairs(ns.PATTERNS) do
-    if pattern.key == key then
-      return pattern
+ns.SCREENS = {
+  { key = "none", name = "None" },
+  { key = "edge", name = "Edge glow", icon = "edge" },
+  { key = "corners", name = "Corners", icon = "corners" },
+}
+
+local function HasKey(list, key)
+  for _, entry in ipairs(list) do
+    if entry.key == key then
+      return true
     end
   end
+  return false
 end
 
 ns.DEFAULTS = {
@@ -53,8 +61,8 @@ ns.DEFAULTS = {
   startPercent = 85,
   pulse = true,
   pulsePercent = 95,
-  pattern = "runes",
-  edgeGlow = false,
+  aura = "runes",
+  screen = "none",
   maxOpacity = 70,
   scale = 100,
   offsetY = -20,
@@ -99,23 +107,53 @@ local function ClampSetting(key, value)
   return math.min(max, math.max(min, value))
 end
 
+-- First-release spec colors, replaced by softer ones if never changed.
+local OLD_COLORS = {
+  { 0.95, 0.12, 0.16 },
+  { 0.25, 0.66, 1.00 },
+  { 0.45, 0.95, 0.25 },
+}
+
+-- Settings from 2.0 development builds.
+local function Migrate(db)
+  if (db.dbVersion or ns.DB_VERSION) >= 2 then
+    return
+  end
+  if db.style then
+    db.pattern = db.style == "edge" and "edge" or "runes"
+    db.edgeGlow = db.style == "both"
+  end
+  if db.pattern == "edge" or db.pattern == "corners" then
+    db.aura, db.screen = "none", db.pattern
+  elseif db.pattern then
+    db.aura, db.screen = db.pattern, db.edgeGlow and "edge" or "none"
+  end
+  db.style, db.pattern, db.edgeGlow = nil, nil, nil
+  if type(db.colors) == "table" then
+    for i, old in ipairs(OLD_COLORS) do
+      local color = db.colors[i]
+      if type(color) == "table" and color.r == old[1] and color.g == old[2] and color.b == old[3] then
+        db.colors[i] = nil
+      end
+    end
+  end
+end
+
 local function InitDB()
   if type(_G.DKNORP_DB) ~= "table" then
     _G.DKNORP_DB = {}
   end
   local db = _G.DKNORP_DB
-  -- Early 2.0 builds had a three-way "style" instead of patterns.
-  if db.style then
-    db.pattern = db.style == "edge" and "edge" or "runes"
-    db.edgeGlow = db.style == "both"
-    db.style = nil
-  end
+  Migrate(db)
   CopyDefaults(ns.DEFAULTS, db)
   for key in pairs(ns.LIMITS) do
     db[key] = ClampSetting(key, db[key])
   end
-  if not ns.GetPattern(db.pattern) then
-    db.pattern = ns.DEFAULTS.pattern
+  if not HasKey(ns.AURAS, db.aura) then
+    db.aura = ns.DEFAULTS.aura
+  end
+  if not HasKey(ns.SCREENS, db.screen) then
+    db.screen = ns.DEFAULTS.screen
   end
   db.dbVersion = ns.DB_VERSION
   ns.db = db

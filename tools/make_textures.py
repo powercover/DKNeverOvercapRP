@@ -291,29 +291,6 @@ def circle(size, name):
     save_alpha(name, downsample((r <= 1.0).astype(np.float32), ss))
 
 
-def logo():
-    size = 128
-    ss = 2
-    _, _, r, theta = grid(size, ss)
-    bg = downsample(((r <= 0.98).astype(np.float32)), ss)
-    rune = runes(size * ss, inner=0.74, outer=0.96, count=12, seed=9)
-    rune = downsample(rune, ss)
-    _, _, r1, theta1 = grid(size)
-    core = np.exp(-(((r1 - 0.52) / 0.035) ** 2))
-    halo = 0.6 * np.exp(-(((r1 - 0.52) / 0.16) ** 2))
-
-    red = np.array([255, 40, 55], dtype=np.float32)
-    dark = np.array([18, 10, 14], dtype=np.float32)
-    glow_a = np.clip(rune + core + halo, 0, 1)[..., None]
-    white_hot = np.clip(core, 0, 1)[..., None] * 0.6
-    rgb = dark * (1 - glow_a) + red * glow_a
-    rgb = rgb * (1 - white_hot) + 255 * white_hot
-    img = np.zeros((size, size, 4), dtype=np.uint8)
-    img[..., :3] = np.clip(rgb, 0, 255).astype(np.uint8)
-    img[..., 3] = np.round(bg * 255).astype(np.uint8)
-    save_rgba("logo", img)
-
-
 if __name__ == "__main__":
     ring()
     ring_core()
@@ -327,4 +304,3 @@ if __name__ == "__main__":
     embers()
     circle(64, "circle")
     circle(32, "circle32")
-    logo()

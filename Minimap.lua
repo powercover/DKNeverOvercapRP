@@ -60,7 +60,7 @@ local function CreateWithLibDBIcon()
   local launcher = LDB:NewDataObject(addonName, {
     type = "launcher",
     label = ns.TITLE,
-    icon = ns.MEDIA .. "logo",
+    icon = ns.ICON,
     OnClick = function(_, mouseButton)
       OnClick(mouseButton)
       RefreshSoon()
@@ -127,7 +127,7 @@ local function CreateOwnButton()
 
   local icon = button:CreateTexture(nil, "ARTWORK")
   icon:SetSize(21, 21)
-  icon:SetTexture(ns.MEDIA .. "logo")
+  icon:SetTexture(ns.ICON)
   icon:SetPoint("TOPLEFT", 5, -5)
   button.icon = icon
 
