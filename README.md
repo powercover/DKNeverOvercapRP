@@ -11,6 +11,7 @@ A runic power overlay for every Death Knight spec. A glowing rune aura builds ar
 - Size, vertical offset, max opacity, motion and smooth-fade settings
 - Optional "only in combat" mode
 - A modern settings page under *Options → AddOns*, with a live **Preview** button
+- Minimap button: left-click opens the settings, right-click turns the overlay on or off, and you can drag it to move it. It shows only on Death Knights.
 - Works in combat in Midnight, where runic power is hidden from addons: the client computes the opacity through a curve
 
 ## Performance
@@ -24,12 +25,13 @@ The addon does nothing unless it's needed:
 
 ## Settings
 
-Open *Game Menu → Options → AddOns → DK Never Overcap RP*.
+Left-click the minimap button, or open *Game Menu → Options → AddOns → DK Never Overcap RP*.
 
 | Card | Setting | Default |
 |---|---|---|
 | General | Enable overlay | on |
 | | Only in combat | off |
+| | Minimap button | shown |
 | | Blood / Frost / Unholy (on/off and color) | all on |
 | Trigger | Appear at | 85% |
 | | Pulse near cap / Pulse at | on / 95% |

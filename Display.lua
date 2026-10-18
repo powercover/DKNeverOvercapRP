@@ -468,7 +468,7 @@ events:SetScript("OnEvent", function(_, event, _, powerType)
 end)
 
 ns.OnChange(function(key)
-  if key == "state" or not root then
+  if key == "state" or key == "minimap" or not root then
     return
   end
   RefreshAppearance()

@@ -45,6 +45,7 @@ ns.DEFAULTS = {
   offsetY = -20,
   motion = true,
   smooth = true,
+  minimap = { hide = false, angle = 210 },
 }
 
 -- min, max, step for every numeric setting.
@@ -147,9 +148,17 @@ function ns.SetSpecColor(specIndex, r, g, b)
   ns.Notify("colors")
 end
 
+function ns.SetMinimapHidden(hidden)
+  ns.db.minimap.hide = hidden and true or false
+  ns.Notify("minimap")
+end
+
+-- Resets everything except where the minimap button sits.
 function ns.ResetSettings()
+  local angle = ns.db.minimap.angle
   wipe(ns.db)
   CopyDefaults(ns.DEFAULTS, ns.db)
+  ns.db.minimap.angle = angle
   ns.db.dbVersion = ns.DB_VERSION
   ns.Notify("*")
 end

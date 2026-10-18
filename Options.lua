@@ -484,7 +484,7 @@ local function Pixels(value)
   return string.format("%+d px", math.floor(value + 0.5))
 end
 
-local function GetStatus()
+function ns.GetStatus()
   if ns.IsPreviewing() then
     return "Previewing", 0.35, 0.7, 1
   end
@@ -564,7 +564,7 @@ local function BuildHeader()
       glow:SetVertexColor(r, g, b, 0.7)
       runes:SetVertexColor(r, g, b)
       core:SetVertexColor(r + (1 - r) * 0.55, g + (1 - g) * 0.55, b + (1 - b) * 0.55)
-      local label, sr, sg, sb = GetStatus()
+      local label, sr, sg, sb = ns.GetStatus()
       dot:SetVertexColor(sr, sg, sb)
       statusText:SetText(label)
       status:SetWidth(statusText:GetStringWidth() + 36)
@@ -600,6 +600,11 @@ local function BuildCards()
   local general = NewCard("General")
   general:Setting("Enable overlay", "Master switch for the aura.", "enabled")
   general:Setting("Only in combat", "Hide the overlay while out of combat.", "combatOnly")
+  general:Toggle("Minimap button", "Left-click opens these settings, right-click turns the overlay on or off, drag to move it.", function()
+    return not ns.db.minimap.hide
+  end, function(on)
+    ns.SetMinimapHidden(not on)
+  end)
   for specIndex = 1, 3 do
     general:Spec(specIndex)
   end
@@ -687,6 +692,19 @@ local function RegisterSettingsCategory()
 
   local category = Settings.RegisterCanvasLayoutCategory(panel, ns.TITLE)
   Settings.RegisterAddOnCategory(category)
+  ns.settingsCategory = category
+end
+
+-- Opens the settings page, or closes the settings window if it is showing it.
+function ns.ToggleSettings()
+  if not ns.settingsCategory then
+    return
+  end
+  if SettingsPanel and SettingsPanel:IsShown() and panel:IsVisible() then
+    HideUIPanel(SettingsPanel)
+    return
+  end
+  Settings.OpenToCategory(ns.settingsCategory:GetID())
 end
 
 ns.OnChange(RefreshAll)
