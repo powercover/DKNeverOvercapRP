@@ -1,7 +1,8 @@
-package-as: BDKNeverOvercapRP
+package-as: DKNeverOvercapRP
 
 enable-nolib-creation: no
 
 ignore:
   - README.md
   - .luacheckrc
+  - tools

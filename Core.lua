@@ -1,10 +1,8 @@
 local addonName, ns = ...
 
 ns.ADDON_NAME = addonName
-ns.TITLE = "BDK Never Overcap RP"
-ns.ICON = "Interface\\Icons\\spell_deathknight_deathstrike"
-ns.ACCENT = { r = 0.77, g = 0.12, b = 0.23 }
-ns.ACCENT_HEX = "ffc41e3a"
+ns.TITLE = "DK Never Overcap RP"
+ns.MEDIA = "Interface\\AddOns\\" .. addonName .. "\\Media\\"
 
 do
   local version = C_AddOns.GetAddOnMetadata(addonName, "Version")
@@ -21,24 +19,32 @@ ns.POWER_TOKEN = "RUNIC_POWER"
 -- Opacity the aura has at the moment it first appears (scaled by max opacity).
 ns.START_ALPHA = 0.15
 
-ns.DB_VERSION = 2
+ns.DB_VERSION = 1
+
+ns.STYLES = {
+  { key = "aura", name = "Aura" },
+  { key = "edge", name = "Screen edge" },
+  { key = "both", name = "Both" },
+}
 
 ns.DEFAULTS = {
   enabled = true,
-  specs = { [1] = true, [2] = false, [3] = false },
+  specs = { [1] = true, [2] = true, [3] = true },
+  colors = {
+    [1] = { r = 0.95, g = 0.12, b = 0.16 },
+    [2] = { r = 0.25, g = 0.66, b = 1.00 },
+    [3] = { r = 0.45, g = 0.95, b = 0.25 },
+  },
   combatOnly = false,
   startPercent = 85,
   pulse = true,
   pulsePercent = 95,
-  texture = "mixed",
-  useTint = false,
-  tint = { r = 1, g = 0.12, b = 0.08 },
+  style = "aura",
   maxOpacity = 100,
   scale = 100,
   offsetY = -20,
-  spin = true,
+  motion = true,
   smooth = true,
-  minimap = { hide = false, angle = 210 },
 }
 
 -- min, max, step for every numeric setting.
@@ -49,27 +55,6 @@ ns.LIMITS = {
   scale = { 50, 200, 5 },
   offsetY = { -400, 400, 5 },
 }
-
-ns.TEXTURE_PRESETS = {
-  { key = "mixed", name = "Blood Boil + Necropolis", side = 511104, corner = 511105 },
-  { key = "bloodboil", name = "Blood Boil", side = 511104, corner = 511104 },
-  { key = "necropolis", name = "Necropolis", side = 511105, corner = 511105 },
-  { key = "bloodsurge", name = "Blood Surge", side = 449487, corner = 449487 },
-  { key = "suddendoom", name = "Sudden Doom", side = 450932, corner = 450932 },
-  { key = "shadowofdeath", name = "Shadow of Death", side = 627609, corner = 627609 },
-  { key = "darktransformation", name = "Dark Transformation", side = 461878, corner = 461878 },
-  { key = "suddendeath", name = "Sudden Death", side = 449493, corner = 449493 },
-  { key = "killingmachine", name = "Killing Machine", side = 458740, corner = 458740 },
-}
-
-local presetsByKey = {}
-for _, preset in ipairs(ns.TEXTURE_PRESETS) do
-  presetsByKey[preset.key] = preset
-end
-
-function ns.GetTexturePreset(key)
-  return presetsByKey[key or ns.db.texture] or ns.TEXTURE_PRESETS[1]
-end
 
 ---------------------------------------------------------------------------
 -- Saved variables
@@ -88,26 +73,6 @@ local function CopyDefaults(src, dst)
   end
 end
 
-local function Migrate(db)
-  local version = db.dbVersion or (db.settingsRev and 1) or ns.DB_VERSION
-  if version < 2 then
-    -- v1 used flat keys; carry over what the user had set.
-    if type(db.overlayAtPercent) == "number" then
-      db.startPercent = db.overlayAtPercent
-    end
-    if type(db.textureKey) == "string" then
-      db.texture = db.textureKey
-    end
-    if type(db.minimapAngle) == "number" then
-      db.minimap = { hide = false, angle = db.minimapAngle }
-    end
-    for _, key in ipairs({ "overlayAtPercent", "textureKey", "minimapAngle", "warnAt", "criticalAt", "powerMaxFallback", "settingsRev" }) do
-      db[key] = nil
-    end
-  end
-  db.dbVersion = ns.DB_VERSION
-end
-
 local function ClampSetting(key, value)
   local limit = ns.LIMITS[key]
   if not limit or type(value) ~= "number" then
@@ -118,19 +83,28 @@ local function ClampSetting(key, value)
   return math.min(max, math.max(min, value))
 end
 
-local function InitDB()
-  if type(_G.BDKNORP_DB) ~= "table" then
-    _G.BDKNORP_DB = {}
+local function IsStyle(key)
+  for _, style in ipairs(ns.STYLES) do
+    if style.key == key then
+      return true
+    end
   end
-  local db = _G.BDKNORP_DB
-  Migrate(db)
+  return false
+end
+
+local function InitDB()
+  if type(_G.DKNORP_DB) ~= "table" then
+    _G.DKNORP_DB = {}
+  end
+  local db = _G.DKNORP_DB
   CopyDefaults(ns.DEFAULTS, db)
   for key in pairs(ns.LIMITS) do
     db[key] = ClampSetting(key, db[key])
   end
-  if not presetsByKey[db.texture] then
-    db.texture = ns.DEFAULTS.texture
+  if not IsStyle(db.style) then
+    db.style = ns.DEFAULTS.style
   end
+  db.dbVersion = ns.DB_VERSION
   ns.db = db
 end
 
@@ -167,22 +141,15 @@ function ns.SetSpecTracked(specIndex, tracked)
   ns.Notify("specs")
 end
 
-function ns.SetTint(r, g, b)
-  local tint = ns.db.tint
-  tint.r, tint.g, tint.b = r, g, b
-  ns.Notify("tint")
-end
-
-function ns.SetMinimapHidden(hidden)
-  ns.db.minimap.hide = hidden and true or false
-  ns.Notify("minimap")
+function ns.SetSpecColor(specIndex, r, g, b)
+  local color = ns.db.colors[specIndex]
+  color.r, color.g, color.b = r, g, b
+  ns.Notify("colors")
 end
 
 function ns.ResetSettings()
-  local angle = ns.db.minimap.angle
   wipe(ns.db)
   CopyDefaults(ns.DEFAULTS, ns.db)
-  ns.db.minimap.angle = angle
   ns.db.dbVersion = ns.DB_VERSION
   ns.Notify("*")
 end
@@ -197,7 +164,16 @@ function ns.GetSpecInfo(specIndex)
 end
 
 function ns.GetSpecIndex()
-  return GetSpecialization and GetSpecialization() or nil
+  local spec = GetSpecialization and GetSpecialization()
+  if spec and spec >= 1 and spec <= 3 then
+    return spec
+  end
+end
+
+-- Color of the current spec; Blood's color on other classes (previews).
+function ns.GetActiveColor()
+  local spec = ns.isDeathKnight and ns.GetSpecIndex() or 1
+  return ns.db.colors[spec]
 end
 
 -- In Midnight, combat values can be secret: they can be passed to widgets
@@ -215,10 +191,6 @@ function ns.IsReadable(value)
     return ok and secret == false
   end
   return true
-end
-
-function ns.Print(msg)
-  DEFAULT_CHAT_FRAME:AddMessage("|c" .. ns.ACCENT_HEX .. ns.TITLE .. "|r: " .. tostring(msg))
 end
 
 ---------------------------------------------------------------------------

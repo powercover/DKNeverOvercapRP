@@ -3,7 +3,7 @@ name: Release
 # Two ways to cut a release:
 #   1. Push a tag:   git tag v2.1.0 && git push origin v2.1.0
 #   2. Actions tab -> Release -> Run workflow, enter a version (e.g. 2.1.0).
-# The packager builds BDKNeverOvercapRP-<version>.zip, writes a changelog
+# The packager builds DKNeverOvercapRP-<version>.zip, writes a changelog
 # from the commits since the previous tag, and publishes a GitHub release.
 # CurseForge / Wago uploads run too when their secrets and TOC IDs are set.
 

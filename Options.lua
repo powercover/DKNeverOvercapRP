@@ -1,27 +1,28 @@
 local addonName, ns = ...
 
-local ACCENT = ns.ACCENT
-local COLUMN_WIDTH = 272
+-- Settings page under Options > AddOns. Every control is drawn from plain
+-- textures (no Blizzard widget templates) for a flat, modern look.
 
-local window
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+local CIRCLE = ns.MEDIA .. "circle"
+local HEADER_HEIGHT = 92
+local GAP = 12
+
+local THEME = {
+  card = { 0.075, 0.075, 0.09, 0.94 },
+  inset = { 0.14, 0.14, 0.17, 1 },
+  hover = { 1, 1, 1, 0.045 },
+  off = { 0.26, 0.26, 0.30, 1 },
+  text = { 0.95, 0.95, 0.97 },
+  muted = { 0.58, 0.59, 0.65 },
+}
+
+local panel, content
 local controls = {}
-local statusText
 
----------------------------------------------------------------------------
--- Helpers
----------------------------------------------------------------------------
-
-local function AttachTooltip(frame, title, body)
-  if not body then
-    return
-  end
-  frame:HookScript("OnEnter", function(self)
-    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetText(title, 1, 1, 1)
-    GameTooltip:AddLine(body, nil, nil, nil, true)
-    GameTooltip:Show()
-  end)
-  frame:HookScript("OnLeave", GameTooltip_Hide)
+local function Accent()
+  local color = ns.GetActiveColor()
+  return color.r, color.g, color.b
 end
 
 local function Track(control)
@@ -29,580 +30,664 @@ local function Track(control)
   return control
 end
 
-function ns.GetStatusText()
-  if ns.IsPreviewing() then
-    return "|cff66ccffPreviewing|r"
-  end
-  if not ns.isDeathKnight then
-    return "|cff888888Inactive|r  (not a Death Knight)"
-  end
-  if not ns.db.enabled then
-    return "|cffff5555Disabled|r"
-  end
-  local spec = ns.GetSpecIndex()
-  local specName = spec and spec > 0 and ns.GetSpecInfo(spec) or "No spec"
-  if ns.IsOverlayActive() then
-    return "|cff55ff55Active|r  (" .. specName .. ")"
-  end
-  return "|cffffcc00Waiting|r  (" .. specName .. " is not tracked)"
+---------------------------------------------------------------------------
+-- Primitives
+---------------------------------------------------------------------------
+
+local function MakeFont(name, size)
+  local font = CreateFont(addonName .. name)
+  font:SetFont(STANDARD_TEXT_FONT, size, "")
+  font:SetShadowColor(0, 0, 0, 0.6)
+  font:SetShadowOffset(1, -1)
+  return font
 end
 
-local function RefreshAll()
-  if not window or not window:IsShown() then
+local FONT = {
+  title = MakeFont("FontTitle", 22),
+  body = MakeFont("FontBody", 13),
+  small = MakeFont("FontSmall", 11),
+}
+
+local function Text(parent, font, color)
+  local fs = parent:CreateFontString(nil, "OVERLAY")
+  fs:SetFontObject(font)
+  fs:SetTextColor(color[1], color[2], color[3])
+  fs:SetJustifyH("LEFT")
+  return fs
+end
+
+local function Circle(parent, size, layer, sublevel)
+  local tex = parent:CreateTexture(nil, layer or "ARTWORK", nil, sublevel)
+  tex:SetTexture(CIRCLE)
+  tex:SetSize(size, size)
+  return tex
+end
+
+-- Rounded rectangle: four quarter-circle corners plus three strips, all
+-- drawn on `owner` and stretched over `region` (owner by default).
+local Rounded = {}
+Rounded.__index = Rounded
+
+local CORNERS = {
+  TOPLEFT = { 0, 0.5, 0, 0.5 },
+  TOPRIGHT = { 0.5, 1, 0, 0.5 },
+  BOTTOMLEFT = { 0, 0.5, 0.5, 1 },
+  BOTTOMRIGHT = { 0.5, 1, 0.5, 1 },
+}
+
+local function NewRounded(owner, radius, layer, sublevel, region)
+  region = region or owner
+  local self = setmetatable({ parts = {} }, Rounded)
+  local function Part(file)
+    local tex = owner:CreateTexture(nil, layer, nil, sublevel)
+    tex:SetTexture(file)
+    self.parts[#self.parts + 1] = tex
+    return tex
+  end
+  for point, coords in pairs(CORNERS) do
+    local corner = Part(CIRCLE)
+    corner:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+    corner:SetSize(radius, radius)
+    corner:SetPoint(point, region, point)
+  end
+  local middle = Part(WHITE)
+  middle:SetPoint("TOPLEFT", region, "TOPLEFT", radius, 0)
+  middle:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", -radius, 0)
+  local left = Part(WHITE)
+  left:SetPoint("TOPLEFT", region, "TOPLEFT", 0, -radius)
+  left:SetPoint("BOTTOMRIGHT", region, "BOTTOMLEFT", radius, radius)
+  local right = Part(WHITE)
+  right:SetPoint("TOPLEFT", region, "TOPRIGHT", -radius, -radius)
+  right:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", 0, radius)
+  return self
+end
+
+function Rounded:SetColor(r, g, b, a)
+  for _, tex in ipairs(self.parts) do
+    tex:SetVertexColor(r, g, b, a or 1)
+  end
+end
+
+function Rounded:SetShown(shown)
+  for _, tex in ipairs(self.parts) do
+    tex:SetShown(shown)
+  end
+end
+
+local function ShowTooltip(owner, title, body)
+  if not body then
     return
   end
-  for _, control in ipairs(controls) do
-    control:Refresh()
+  GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+  GameTooltip:SetText(title, 1, 1, 1)
+  GameTooltip:AddLine(body, nil, nil, nil, true)
+  GameTooltip:Show()
+end
+
+local function PlayToggleSound(on)
+  PlaySound(on and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
+end
+
+---------------------------------------------------------------------------
+-- Controls
+---------------------------------------------------------------------------
+
+local function CreateSwitch(parent)
+  local switch = CreateFrame("Frame", nil, parent)
+  switch:SetSize(36, 20)
+  local track = NewRounded(switch, 10, "ARTWORK")
+  local knob = Circle(switch, 14, "OVERLAY")
+  function switch.SetOn(_, on)
+    knob:ClearAllPoints()
+    if on then
+      knob:SetPoint("RIGHT", -3, 0)
+      track:SetColor(Accent())
+    else
+      knob:SetPoint("LEFT", 3, 0)
+      track:SetColor(unpack(THEME.off))
+    end
   end
-  statusText:SetText("Status: " .. ns.GetStatusText())
+  return switch
 end
 
----------------------------------------------------------------------------
--- Widgets
----------------------------------------------------------------------------
-
--- Lays widgets out top to bottom inside a column.
-local Column = {}
-Column.__index = Column
-
-local function NewColumn(parent, x, y)
-  return setmetatable({ parent = parent, x = x, y = y }, Column)
-end
-
-function Column:Place(widget, height, indent)
-  widget:SetPoint("TOPLEFT", self.parent, "TOPLEFT", self.x + (indent or 0), self.y)
-  self.y = self.y - height
-end
-
-function Column:Gap(height)
-  self.y = self.y - height
-end
-
-function Column:Header(text)
-  local label = self.parent:CreateFontString(nil, "ARTWORK", "GameFontNormalMed2")
-  label:SetText(text)
-  label:SetTextColor(ACCENT.r + 0.15, ACCENT.g + 0.15, ACCENT.b + 0.15)
-  self:Place(label, 18)
-
-  local line = self.parent:CreateTexture(nil, "ARTWORK")
-  line:SetColorTexture(ACCENT.r, ACCENT.g, ACCENT.b, 0.6)
-  line:SetSize(COLUMN_WIDTH, 1)
-  self:Place(line, 10)
-end
-
-function Column:Label(text, font)
-  local label = self.parent:CreateFontString(nil, "ARTWORK", font or "GameFontHighlight")
-  label:SetText(text)
-  self:Place(label, 18)
-  return label
-end
-
-local function CreateCheckbox(parent, label, tooltip, get, set)
-  local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-  cb:SetSize(26, 26)
-  local text = cb.text or cb.Text or cb:CreateFontString(nil, "ARTWORK")
-  text:SetFontObject("GameFontHighlight")
-  text:ClearAllPoints()
-  text:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+local function PillButton(parent, label, width, primary)
+  local button = CreateFrame("Button", nil, parent)
+  button:SetSize(width, 28)
+  local bg = NewRounded(button, 14, "BACKGROUND")
+  local text = Text(button, FONT.body, THEME.text)
+  text:SetPoint("CENTER")
   text:SetText(label)
-  cb:SetHitRectInsets(0, -(text:GetStringWidth() + 6), 0, 0)
-  cb:SetScript("OnClick", function(self)
-    PlaySound(self:GetChecked() and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
-    set(self:GetChecked())
-  end)
-  AttachTooltip(cb, label, tooltip)
-  cb.label = text
-  cb.Refresh = function()
-    cb:SetChecked(get() and true or false)
+  button.text = text
+
+  local function Paint()
+    local hover = button:IsMouseOver()
+    if primary then
+      local r, g, b = Accent()
+      local k = hover and 1.2 or 1
+      bg:SetColor(math.min(1, r * k), math.min(1, g * k), math.min(1, b * k), 0.9)
+    else
+      bg:SetColor(1, 1, 1, hover and 0.14 or 0.08)
+    end
   end
-  return Track(cb)
+  button:SetScript("OnEnter", Paint)
+  button:SetScript("OnLeave", Paint)
+  button.Refresh = Paint
+  return Track(button)
 end
 
-function Column:Checkbox(label, tooltip, key)
-  local cb = CreateCheckbox(self.parent, label, tooltip, function()
+local function OpenColorPicker(color, apply)
+  ColorPickerFrame:SetupColorPickerAndShow({
+    r = color.r,
+    g = color.g,
+    b = color.b,
+    hasOpacity = false,
+    swatchFunc = function()
+      apply(ColorPickerFrame:GetColorRGB())
+    end,
+    cancelFunc = function(previous)
+      apply(previous.r, previous.g, previous.b)
+    end,
+  })
+end
+
+---------------------------------------------------------------------------
+-- Cards and rows
+---------------------------------------------------------------------------
+
+local Card = {}
+Card.__index = Card
+
+local function NewCard(title)
+  local frame = CreateFrame("Frame", nil, content)
+  NewRounded(frame, 12, "BACKGROUND", -1):SetColor(unpack(THEME.card))
+  local label = Text(frame, FONT.small, THEME.muted)
+  label:SetPoint("TOPLEFT", 18, -16)
+  label:SetText(title:upper())
+  return setmetatable({ frame = frame, y = -36 }, Card)
+end
+
+function Card:Finish()
+  self.frame:SetHeight(-self.y + 10)
+  return self
+end
+
+-- Clickable rows get a hover highlight; rows that host their own
+-- interactive widget (sliders, segmented bars) only show a tooltip.
+function Card:Row(height, label, tooltip, clickable)
+  local row = CreateFrame(clickable and "Button" or "Frame", nil, self.frame)
+  row:SetPoint("TOPLEFT", self.frame, "TOPLEFT", 8, self.y)
+  row:SetPoint("TOPRIGHT", self.frame, "TOPRIGHT", -8, self.y)
+  row:SetHeight(height)
+  row:EnableMouse(true)
+  self.y = self.y - height
+
+  local hover
+  if clickable then
+    hover = NewRounded(row, 8, "BACKGROUND")
+    hover:SetColor(unpack(THEME.hover))
+    hover:SetShown(false)
+  end
+  row:SetScript("OnEnter", function()
+    if hover then
+      hover:SetShown(true)
+    end
+    ShowTooltip(row, label, tooltip)
+  end)
+  row:SetScript("OnLeave", function()
+    if hover then
+      hover:SetShown(false)
+    end
+    GameTooltip:Hide()
+  end)
+  return row
+end
+
+function Card:Toggle(label, tooltip, get, set)
+  local row = self:Row(36, label, tooltip, true)
+  local text = Text(row, FONT.body, THEME.text)
+  text:SetPoint("LEFT", 10, 0)
+  text:SetText(label)
+  local switch = CreateSwitch(row)
+  switch:SetPoint("RIGHT", -10, 0)
+  row:SetScript("OnClick", function()
+    local on = not get()
+    PlayToggleSound(on)
+    set(on)
+  end)
+  row.Refresh = function()
+    switch:SetOn(get())
+  end
+  return Track(row)
+end
+
+function Card:Setting(label, tooltip, key)
+  return self:Toggle(label, tooltip, function()
     return ns.db[key]
   end, function(value)
-    ns.Set(key, value and true or false)
+    ns.Set(key, value)
   end)
-  self:Place(cb, 28)
-  return cb
 end
 
-local function SetControlEnabled(frame, enabled)
-  if frame.SetEnabled then
-    frame:SetEnabled(enabled)
-  end
-  frame:SetAlpha(enabled and 1 or 0.45)
-end
+function Card:Slider(label, tooltip, key, format, isEnabled)
+  local limit = ns.LIMITS[key]
+  local row = self:Row(54, label, tooltip, false)
 
-local function CreateModernSlider(parent, width, limit, format)
-  local ok, slider = pcall(CreateFrame, "Frame", nil, parent, "MinimalSliderWithSteppersTemplate")
-  if not ok or not slider or not slider.Init or not MinimalSliderWithSteppersMixin then
-    return nil
-  end
-  slider:SetWidth(width)
-  local formatters = { [MinimalSliderWithSteppersMixin.Label.Right] = format }
-  slider:Init(limit[1], limit[1], limit[2], (limit[2] - limit[1]) / limit[3], formatters)
-  slider.OnUserChange = function() end
-  slider:RegisterCallback(MinimalSliderWithSteppersMixin.Event.OnValueChanged, function(_, value)
-    if not slider.suppress then
-      slider.OnUserChange(value)
-    end
-  end, slider)
-  return slider
-end
+  local text = Text(row, FONT.body, THEME.text)
+  text:SetPoint("TOPLEFT", 10, -9)
+  text:SetText(label)
+  local value = Text(row, FONT.body, THEME.text)
+  value:SetPoint("TOPRIGHT", -10, -9)
+  value:SetJustifyH("RIGHT")
 
--- Plain slider for clients without the minimal slider template.
-local function CreateBasicSlider(parent, width, limit, format)
-  local holder = CreateFrame("Frame", nil, parent)
-  holder:SetSize(width, 20)
-
-  local slider = CreateFrame("Slider", nil, holder)
+  local slider = CreateFrame("Slider", nil, row)
+  slider:SetPoint("BOTTOMLEFT", 10, 8)
+  slider:SetPoint("BOTTOMRIGHT", -10, 8)
+  slider:SetHeight(16)
   slider:SetOrientation("HORIZONTAL")
-  slider:SetPoint("LEFT")
-  slider:SetSize(width - 44, 16)
-  slider:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
   slider:SetMinMaxValues(limit[1], limit[2])
   slider:SetValueStep(limit[3])
   slider:SetObeyStepOnDrag(true)
-  local track = slider:CreateTexture(nil, "BACKGROUND")
-  track:SetColorTexture(0, 0, 0, 0.55)
-  track:SetPoint("LEFT")
-  track:SetPoint("RIGHT")
-  track:SetHeight(6)
+  slider:EnableMouse(true)
 
-  local value = holder:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-  value:SetPoint("LEFT", slider, "RIGHT", 8, 0)
+  local trackRegion = slider:CreateTexture(nil, "BACKGROUND")
+  trackRegion:SetPoint("LEFT")
+  trackRegion:SetPoint("RIGHT")
+  trackRegion:SetHeight(4)
+  NewRounded(slider, 2, "BACKGROUND", 1, trackRegion):SetColor(unpack(THEME.off))
 
-  holder.Slider = slider
-  holder.OnUserChange = function() end
+  local thumb = Circle(slider, 14, "OVERLAY")
+  slider:SetThumbTexture(thumb)
+
+  local fillRegion = slider:CreateTexture(nil, "ARTWORK")
+  fillRegion:SetPoint("LEFT", trackRegion)
+  fillRegion:SetHeight(4)
+  local fill = NewRounded(slider, 2, "ARTWORK", 1, fillRegion)
+
+  -- The thumb travels between half its width from either end.
+  local function UpdateFill()
+    local width = slider:GetWidth() or 0
+    local t = (slider:GetValue() - limit[1]) / (limit[2] - limit[1])
+    fillRegion:SetWidth(math.max(4, 7 + t * (width - 14)))
+  end
+
   slider:SetScript("OnValueChanged", function(_, v)
     value:SetText(format(v))
-    if not holder.suppress then
-      holder.OnUserChange(v)
+    UpdateFill()
+    if not slider.suppress then
+      ns.Set(key, v)
     end
   end)
-  holder.SetValue = function(_, v)
-    slider:SetValue(v)
-    value:SetText(format(v))
-  end
-  holder.SetEnabled = function(_, enabled)
+  slider:SetScript("OnSizeChanged", UpdateFill)
+  slider:SetScript("OnEnter", function()
+    ShowTooltip(slider, label, tooltip)
+  end)
+  slider:SetScript("OnLeave", GameTooltip_Hide)
+
+  row.slider = slider
+  row.Refresh = function()
+    slider.suppress = true
+    slider:SetValue(ns.db[key])
+    slider.suppress = false
+    value:SetText(format(ns.db[key]))
+    local r, g, b = Accent()
+    fill:SetColor(r, g, b)
+    value:SetTextColor(r, g, b)
+    local enabled = not isEnabled or isEnabled()
     if enabled then
       slider:Enable()
     else
       slider:Disable()
     end
+    row:SetAlpha(enabled and 1 or 0.4)
   end
-  return holder
+  return Track(row)
 end
 
-function Column:Slider(label, tooltip, key, format, isEnabled)
-  local limit = ns.LIMITS[key]
-  local title = self:Label(label)
-  local slider = CreateModernSlider(self.parent, COLUMN_WIDTH - 44, limit, format)
-    or CreateBasicSlider(self.parent, COLUMN_WIDTH, limit, format)
-  self:Place(slider, 32)
-  slider.OnUserChange = function(value)
-    ns.Set(key, value)
-  end
-  AttachTooltip(slider.Slider or slider, label, tooltip)
-  slider.Refresh = function()
-    slider.suppress = true
-    slider:SetValue(ns.db[key])
-    slider.suppress = false
-    if isEnabled then
-      local enabled = isEnabled()
-      SetControlEnabled(slider, enabled)
-      title:SetAlpha(enabled and 1 or 0.45)
-    end
-  end
-  return Track(slider)
-end
+function Card:Segmented(label, tooltip, options, get, set)
+  local row = self:Row(64, label, tooltip, false)
+  local text = Text(row, FONT.body, THEME.text)
+  text:SetPoint("TOPLEFT", 10, -9)
+  text:SetText(label)
 
-local function CreateTextureDropdown(parent, width)
-  local ok, dropdown = pcall(CreateFrame, "DropdownButton", nil, parent, "WowStyle1DropdownTemplate")
-  if ok and dropdown and dropdown.SetupMenu then
-    dropdown:SetWidth(width)
-    dropdown:SetupMenu(function(_, rootDescription)
-      for _, preset in ipairs(ns.TEXTURE_PRESETS) do
-        rootDescription:CreateRadio(preset.name, function()
-          return ns.db.texture == preset.key
-        end, function()
-          ns.Set("texture", preset.key)
-        end)
-      end
+  local bar = CreateFrame("Frame", nil, row)
+  bar:SetPoint("BOTTOMLEFT", 10, 8)
+  bar:SetPoint("BOTTOMRIGHT", -10, 8)
+  bar:SetHeight(30)
+  NewRounded(bar, 9, "BACKGROUND"):SetColor(unpack(THEME.inset))
+
+  local buttons = {}
+  for i, option in ipairs(options) do
+    local button = CreateFrame("Button", nil, bar)
+    button:SetHeight(24)
+    button.bg = NewRounded(button, 7, "ARTWORK")
+    button.text = Text(button, FONT.body, THEME.muted)
+    button.text:SetPoint("CENTER")
+    button.text:SetText(option.name)
+    button:SetScript("OnClick", function()
+      PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
+      set(option.key)
     end)
-    dropdown.Refresh = function()
-      dropdown:GenerateMenu()
-    end
-    return dropdown
-  end
-
-  dropdown = CreateFrame("Frame", addonName .. "TextureDropdown", parent, "UIDropDownMenuTemplate")
-  UIDropDownMenu_SetWidth(dropdown, width - 30)
-  UIDropDownMenu_Initialize(dropdown, function()
-    for _, preset in ipairs(ns.TEXTURE_PRESETS) do
-      local info = UIDropDownMenu_CreateInfo()
-      info.text = preset.name
-      info.checked = ns.db.texture == preset.key
-      info.func = function()
-        ns.Set("texture", preset.key)
+    button:SetScript("OnEnter", function()
+      if get() ~= option.key then
+        button.text:SetTextColor(unpack(THEME.text))
       end
-      UIDropDownMenu_AddButton(info)
+      ShowTooltip(button, label, tooltip)
+    end)
+    button:SetScript("OnLeave", function()
+      row.Refresh()
+      GameTooltip:Hide()
+    end)
+    buttons[i] = button
+  end
+
+  local function Layout(width)
+    if not width or width <= 0 then
+      return
     end
-  end)
-  dropdown.legacy = true
-  dropdown.Refresh = function()
-    UIDropDownMenu_SetText(dropdown, ns.GetTexturePreset().name)
+    local each = (width - 6) / #buttons
+    for i, button in ipairs(buttons) do
+      button:ClearAllPoints()
+      button:SetWidth(each)
+      button:SetPoint("LEFT", bar, "LEFT", 3 + (i - 1) * each, 0)
+    end
   end
-  return dropdown
+  bar:SetScript("OnSizeChanged", function(_, width)
+    Layout(width)
+  end)
+
+  row.Refresh = function()
+    Layout(bar:GetWidth())
+    local r, g, b = Accent()
+    for i, button in ipairs(buttons) do
+      local selected = get() == options[i].key
+      button.bg:SetShown(selected)
+      button.bg:SetColor(r, g, b, 0.85)
+      if selected then
+        button.text:SetTextColor(1, 1, 1)
+      else
+        button.text:SetTextColor(unpack(THEME.muted))
+      end
+    end
+  end
+  return Track(row)
 end
 
-local function CreateColorSwatch(parent)
-  local swatch = CreateFrame("Button", nil, parent)
-  swatch:SetSize(20, 20)
-  local border = swatch:CreateTexture(nil, "BACKGROUND")
-  border:SetAllPoints()
-  border:SetColorTexture(0.85, 0.85, 0.85, 1)
-  local fill = swatch:CreateTexture(nil, "ARTWORK")
-  fill:SetPoint("TOPLEFT", 2, -2)
-  fill:SetPoint("BOTTOMRIGHT", -2, 2)
+function Card:Spec(specIndex)
+  local name, icon = ns.GetSpecInfo(specIndex)
+  local row = self:Row(42, name, "Show the overlay while you are in " .. name .. ". Click the dot to pick this spec's color.", true)
 
+  local iconTex = row:CreateTexture(nil, "ARTWORK")
+  iconTex:SetSize(24, 24)
+  iconTex:SetPoint("LEFT", 10, 0)
+  if icon then
+    iconTex:SetTexture(icon)
+  end
+  local mask = row:CreateMaskTexture()
+  mask:SetTexture(CIRCLE, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+  mask:SetAllPoints(iconTex)
+  iconTex:AddMaskTexture(mask)
+
+  local text = Text(row, FONT.body, THEME.text)
+  text:SetPoint("LEFT", iconTex, "RIGHT", 10, 0)
+  text:SetText(name)
+
+  local switch = CreateSwitch(row)
+  switch:SetPoint("RIGHT", -10, 0)
+
+  local swatch = CreateFrame("Button", nil, row)
+  swatch:SetSize(22, 22)
+  swatch:SetPoint("RIGHT", switch, "LEFT", -14, 0)
+  local ring = Circle(swatch, 22, "ARTWORK")
+  ring:SetPoint("CENTER")
+  local dot = Circle(swatch, 16, "OVERLAY")
+  dot:SetPoint("CENTER")
   swatch:SetScript("OnClick", function()
-    local tint = ns.db.tint
-    ColorPickerFrame:SetupColorPickerAndShow({
-      r = tint.r,
-      g = tint.g,
-      b = tint.b,
-      hasOpacity = false,
-      swatchFunc = function()
-        ns.SetTint(ColorPickerFrame:GetColorRGB())
-      end,
-      cancelFunc = function(previous)
-        ns.SetTint(previous.r, previous.g, previous.b)
-      end,
-    })
+    OpenColorPicker(ns.db.colors[specIndex], function(r, g, b)
+      ns.SetSpecColor(specIndex, r, g, b)
+    end)
   end)
-  AttachTooltip(swatch, "Aura color", "Click to pick the color used when custom color is on.")
-  swatch.Refresh = function()
-    local tint = ns.db.tint
-    fill:SetColorTexture(tint.r, tint.g, tint.b, 1)
-    SetControlEnabled(swatch, ns.db.useTint)
+  swatch:SetScript("OnEnter", function()
+    ring:SetVertexColor(1, 1, 1, 0.6)
+    ShowTooltip(swatch, name .. " color", "Click to change the color used in " .. name .. ".")
+  end)
+  swatch:SetScript("OnLeave", function()
+    ring:SetVertexColor(1, 1, 1, 0.18)
+    GameTooltip:Hide()
+  end)
+
+  row:SetScript("OnClick", function()
+    local on = not ns.db.specs[specIndex]
+    PlayToggleSound(on)
+    ns.SetSpecTracked(specIndex, on)
+  end)
+  row.Refresh = function()
+    local color = ns.db.colors[specIndex]
+    dot:SetVertexColor(color.r, color.g, color.b)
+    ring:SetVertexColor(1, 1, 1, swatch:IsMouseOver() and 0.6 or 0.18)
+    local on = ns.db.specs[specIndex]
+    switch:SetOn(on)
+    iconTex:SetDesaturated(not on)
+    text:SetTextColor(unpack(on and THEME.text or THEME.muted))
   end
-  return Track(swatch)
+  return Track(row)
 end
+
+---------------------------------------------------------------------------
+-- Page
+---------------------------------------------------------------------------
 
 local function Percent(value)
   return string.format("%d%%", math.floor(value + 0.5))
 end
 
 local function Pixels(value)
-  return string.format("%+d", math.floor(value + 0.5))
+  return string.format("%+d px", math.floor(value + 0.5))
 end
 
----------------------------------------------------------------------------
--- Settings window
----------------------------------------------------------------------------
-
-local function BuildBehaviorColumn(col)
-  col:Header("Behavior")
-  col:Checkbox("Enable overlay", "Master switch. Right-click the minimap button to toggle it quickly.", "enabled")
-
-  col:Gap(4)
-  col:Label("Track these specs", "GameFontNormalSmall")
-  local x = 0
-  for specIndex = 1, 3 do
-    local name, icon = ns.GetSpecInfo(specIndex)
-    local label = (icon and ("|T" .. icon .. ":16:16:0:0:64:64:5:59:5:59|t ") or "") .. name
-    local cb = CreateCheckbox(col.parent, label, "Show the overlay while you are in " .. name .. ".", function()
-      return ns.db.specs[specIndex]
-    end, function(value)
-      ns.SetSpecTracked(specIndex, value)
-    end)
-    cb:SetPoint("TOPLEFT", col.parent, "TOPLEFT", col.x + x, col.y)
-    x = x + 90
+local function GetStatus()
+  if ns.IsPreviewing() then
+    return "Previewing", 0.35, 0.7, 1
   end
-  col:Gap(30)
-
-  col:Checkbox("Only in combat", "Hide the overlay while out of combat.", "combatOnly")
-
-  local minimap = CreateCheckbox(col.parent, "Minimap button", "Show the minimap button. The addon compartment entry is always available.", function()
-    return not ns.db.minimap.hide
-  end, function(value)
-    ns.SetMinimapHidden(not value)
-  end)
-  col:Place(minimap, 28)
-
-  col:Gap(10)
-  col:Header("Trigger")
-  col:Slider("Appear at runic power", "The aura fades in from this share of max runic power and reaches full opacity at the cap.", "startPercent", Percent)
-  col:Checkbox("Pulse near cap", "Add a pulsing flare when runic power is about to cap.", "pulse")
-  col:Slider("Pulse at runic power", "Runic power share at which the pulse starts.", "pulsePercent", Percent, function()
-    return ns.db.pulse
-  end)
+  if not ns.isDeathKnight then
+    return "Inactive · not a Death Knight", 0.55, 0.55, 0.6
+  end
+  if not ns.db.enabled then
+    return "Disabled", 1, 0.38, 0.38
+  end
+  local spec = ns.GetSpecIndex()
+  local specName = spec and ns.GetSpecInfo(spec) or "No spec"
+  if ns.IsOverlayActive() then
+    return "Active · " .. specName, 0.3, 0.9, 0.45
+  end
+  return "Paused · " .. specName .. " is off", 1, 0.75, 0.25
 end
 
-local function BuildAppearanceColumn(col)
-  col:Header("Appearance")
-  col:Label("Texture", "GameFontNormalSmall")
-  local dropdown = Track(CreateTextureDropdown(col.parent, COLUMN_WIDTH))
-  col:Place(dropdown, 34, dropdown.legacy and -16 or 0)
+local function BuildHeader()
+  local logo = CreateFrame("Frame", nil, content)
+  logo:SetSize(56, 56)
+  logo:SetPoint("TOPLEFT", 16, -16)
+  local glow = logo:CreateTexture(nil, "BACKGROUND")
+  glow:SetTexture(ns.MEDIA .. "glow")
+  glow:SetBlendMode("ADD")
+  glow:SetPoint("CENTER")
+  glow:SetSize(72, 72)
+  local runes = logo:CreateTexture(nil, "ARTWORK")
+  runes:SetTexture(ns.MEDIA .. "runes")
+  runes:SetBlendMode("ADD")
+  runes:SetAllPoints()
+  local core = logo:CreateTexture(nil, "OVERLAY")
+  core:SetTexture(ns.MEDIA .. "ring_core")
+  core:SetBlendMode("ADD")
+  core:SetAllPoints()
 
-  local tint = col:Checkbox("Custom color", "Recolor the aura with a single color instead of the texture's own colors.", "useTint")
-  local swatch = CreateColorSwatch(col.parent)
-  swatch:SetPoint("LEFT", tint.label, "RIGHT", 10, 0)
+  local spin = runes:CreateAnimationGroup()
+  spin:SetLooping("REPEAT")
+  local rotation = spin:CreateAnimation("Rotation")
+  rotation:SetDegrees(-360)
+  rotation:SetDuration(30)
+  logo.spin = spin
 
-  col:Gap(4)
-  col:Slider("Max opacity", "Opacity of the aura at full runic power.", "maxOpacity", Percent)
-  col:Slider("Size", "Scale of the aura around your character.", "scale", Percent)
-  col:Slider("Vertical offset", "Move the aura up or down, in pixels.", "offsetY", Pixels)
-  col:Checkbox("Spinning runes", "Slowly rotate the two rune swirls.", "spin")
-  col:Checkbox("Smooth fade", "Ease opacity changes instead of snapping. In combat, when runic power is hidden from addons, the aura always snaps.", "smooth")
-end
+  local title = Text(content, FONT.title, THEME.text)
+  title:SetPoint("TOPLEFT", logo, "TOPRIGHT", 14, -4)
+  title:SetText(ns.TITLE)
 
-local function CreateWindow()
-  window = CreateFrame("Frame", addonName .. "Options", UIParent, "ButtonFrameTemplate")
-  window:SetSize(620, 500)
-  window:SetPoint("CENTER")
-  window:SetFrameStrata("DIALOG")
-  window:SetToplevel(true)
-  window:SetClampedToScreen(true)
-  window:SetMovable(true)
-  window:EnableMouse(true)
-  window:RegisterForDrag("LeftButton")
-  window:SetScript("OnDragStart", window.StartMoving)
-  window:SetScript("OnDragStop", window.StopMovingOrSizing)
-  window:Hide()
-  tinsert(UISpecialFrames, window:GetName())
+  local status = CreateFrame("Frame", nil, content)
+  status:SetHeight(22)
+  status:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
+  NewRounded(status, 11, "BACKGROUND"):SetColor(1, 1, 1, 0.06)
+  local dot = Circle(status, 8, "ARTWORK")
+  dot:SetPoint("LEFT", 10, 0)
+  local statusText = Text(status, FONT.small, THEME.text)
+  statusText:SetPoint("LEFT", dot, "RIGHT", 7, 0)
 
-  if window.SetTitle then
-    window:SetTitle(ns.TITLE)
-  end
-  if window.SetPortraitToAsset then
-    window:SetPortraitToAsset(ns.ICON)
-  end
+  local version = Text(content, FONT.small, THEME.muted)
+  version:SetPoint("LEFT", status, "RIGHT", 10, 0)
+  version:SetText("v" .. ns.VERSION)
 
-  local content = window.Inset or window
-
-  statusText = content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-  statusText:SetPoint("TOPLEFT", 16, -12)
-
-  local divider = content:CreateTexture(nil, "ARTWORK")
-  divider:SetColorTexture(1, 1, 1, 0.08)
-  divider:SetPoint("TOPLEFT", 10, -32)
-  divider:SetPoint("TOPRIGHT", -10, -32)
-
-  BuildBehaviorColumn(NewColumn(content, 16, -44))
-  BuildAppearanceColumn(NewColumn(content, 318, -44))
-
-  local version = window:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
-  version:SetPoint("BOTTOMLEFT", 14, 9)
-  version:SetText("v" .. ns.VERSION .. "  ·  /bnorp help")
-
-  local preview = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
-  preview:SetSize(130, 22)
-  preview:SetPoint("BOTTOMRIGHT", -8, 4)
+  local preview = PillButton(content, "Preview", 116, true)
+  preview:SetPoint("TOPRIGHT", -16, -24)
   preview:SetScript("OnClick", function()
+    PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
     ns.SetPreview(not ns.IsPreviewing())
   end)
-  AttachTooltip(preview, "Preview", "Show the aura at full strength while this window is open.")
-  preview.Refresh = function()
-    preview:SetText(ns.IsPreviewing() and "Stop preview" or "Preview")
-  end
-  Track(preview)
 
-  local reset = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
-  reset:SetSize(130, 22)
-  reset:SetPoint("RIGHT", preview, "LEFT", -6, 0)
-  reset:SetText("Reset to defaults")
+  local reset = PillButton(content, "Reset", 84, false)
+  reset:SetPoint("RIGHT", preview, "LEFT", -8, 0)
   reset:SetScript("OnClick", function()
+    PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
     ns.ResetSettings()
-    ns.Print("settings reset to defaults")
   end)
 
-  window:SetScript("OnShow", function()
-    PlaySound(SOUNDKIT.IG_CHARACTER_INFO_OPEN)
-    RefreshAll()
-  end)
-  window:SetScript("OnHide", function()
-    PlaySound(SOUNDKIT.IG_CHARACTER_INFO_CLOSE)
-    ns.SetPreview(false)
-  end)
+  Track({
+    Refresh = function()
+      local r, g, b = Accent()
+      glow:SetVertexColor(r, g, b, 0.7)
+      runes:SetVertexColor(r, g, b)
+      core:SetVertexColor(r + (1 - r) * 0.55, g + (1 - g) * 0.55, b + (1 - b) * 0.55)
+      local label, sr, sg, sb = GetStatus()
+      dot:SetVertexColor(sr, sg, sb)
+      statusText:SetText(label)
+      status:SetWidth(statusText:GetStringWidth() + 36)
+      preview.text:SetText(ns.IsPreviewing() and "Stop preview" or "Preview")
+    end,
+  })
+  return logo
 end
 
-function ns.ToggleOptions(show)
-  if not window then
-    CreateWindow()
+local function StackCards(cards, left)
+  local previous
+  local height = 0
+  for _, card in ipairs(cards) do
+    local frame = card.frame
+    if previous then
+      frame:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -GAP)
+      frame:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, -GAP)
+      height = height + GAP
+    elseif left then
+      frame:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -HEADER_HEIGHT)
+      frame:SetPoint("TOPRIGHT", content, "TOP", -GAP / 2, -HEADER_HEIGHT)
+    else
+      frame:SetPoint("TOPLEFT", content, "TOP", GAP / 2, -HEADER_HEIGHT)
+      frame:SetPoint("TOPRIGHT", content, "TOPRIGHT", -16, -HEADER_HEIGHT)
+    end
+    height = height + frame:GetHeight()
+    previous = frame
   end
-  if show == nil then
-    show = not window:IsShown()
-  end
-  window:SetShown(show)
+  return height
 end
 
-ns.OnChange(RefreshAll)
+local function BuildCards()
+  local general = NewCard("General")
+  general:Setting("Enable overlay", "Master switch for the aura.", "enabled")
+  general:Setting("Only in combat", "Hide the overlay while out of combat.", "combatOnly")
+  for specIndex = 1, 3 do
+    general:Spec(specIndex)
+  end
+  general:Finish()
 
----------------------------------------------------------------------------
--- Game menu > Options > AddOns entry
----------------------------------------------------------------------------
+  local trigger = NewCard("Trigger")
+  trigger:Slider("Appear at", "The aura fades in from this share of max runic power and reaches full strength at the cap.", "startPercent", Percent)
+  trigger:Setting("Pulse near cap", "Add a pulsing flare when runic power is about to cap.", "pulse")
+  trigger:Slider("Pulse at", "Runic power share at which the pulse starts.", "pulsePercent", Percent, function()
+    return ns.db.pulse
+  end)
+  trigger:Finish()
+
+  local style = NewCard("Style")
+  style:Segmented("Look", "Aura: a burning rune circle around your character. Screen edge: a glow around the edges of the screen.", ns.STYLES, function()
+    return ns.db.style
+  end, function(key)
+    ns.Set("style", key)
+  end)
+  style:Slider("Max opacity", "Opacity at full runic power.", "maxOpacity", Percent)
+  style:Slider("Size", "Size of the aura around your character.", "scale", Percent)
+  style:Slider("Vertical offset", "Move the aura up or down.", "offsetY", Pixels)
+  style:Setting("Motion", "Slowly turn the rune circle and let the ring flicker.", "motion")
+  style:Setting("Smooth fade", "Ease opacity changes instead of snapping. In combat, when runic power is hidden from addons, the aura always snaps.", "smooth")
+  style:Finish()
+
+  local leftHeight = StackCards({ general, trigger }, true)
+  local rightHeight = StackCards({ style }, false)
+  return math.max(leftHeight, rightHeight)
+end
+
+local function RefreshAll()
+  if not panel or not panel.built or not panel:IsVisible() then
+    return
+  end
+  for _, control in ipairs(controls) do
+    control.Refresh()
+  end
+end
+
+-- Built on first open so characters that never look at it pay nothing.
+local function BuildPanel()
+  panel.built = true
+
+  local scroll = CreateFrame("ScrollFrame", nil, panel)
+  scroll:SetAllPoints()
+  scroll:EnableMouseWheel(true)
+  scroll:SetScript("OnMouseWheel", function(self, delta)
+    local range = self:GetVerticalScrollRange() or 0
+    self:SetVerticalScroll(math.min(range, math.max(0, self:GetVerticalScroll() - delta * 40)))
+  end)
+
+  content = CreateFrame("Frame", nil, scroll)
+  scroll:SetScrollChild(content)
+  content:SetWidth(math.max(560, panel:GetWidth() or 0))
+  scroll:SetScript("OnSizeChanged", function(_, width)
+    content:SetWidth(math.max(560, width))
+  end)
+
+  panel.logo = BuildHeader()
+  content:SetHeight(HEADER_HEIGHT + BuildCards() + 16)
+end
 
 local function RegisterSettingsCategory()
   if not (Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory) then
     return
   end
-  local panel = CreateFrame("Frame")
-
-  local title = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightHuge")
-  title:SetPoint("TOPLEFT", 16, -16)
-  title:SetText(ns.TITLE)
-
-  local about = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-  about:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -12)
-  about:SetWidth(520)
-  about:SetJustifyH("LEFT")
-  about:SetText("Shows a blood aura around your character as runic power approaches the cap, so you spend it before it is wasted.")
-
-  local open = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-  open:SetSize(180, 26)
-  open:SetPoint("TOPLEFT", about, "BOTTOMLEFT", 0, -16)
-  open:SetText("Open settings")
-  open:SetScript("OnClick", function()
-    if SettingsPanel and SettingsPanel:IsShown() then
-      HideUIPanel(SettingsPanel)
+  panel = CreateFrame("Frame")
+  panel:SetScript("OnShow", function()
+    if not panel.built then
+      BuildPanel()
     end
-    ns.ToggleOptions(true)
+    panel.logo.spin:Play()
+    RefreshAll()
   end)
+  panel:SetScript("OnHide", function()
+    -- Settings can hide the panel before it is ever shown.
+    if panel.built then
+      panel.logo.spin:Stop()
+    end
+    ns.SetPreview(false)
+  end)
+  -- Called by the settings window's own Defaults button.
+  panel.OnDefault = ns.ResetSettings
 
   local category = Settings.RegisterCanvasLayoutCategory(panel, ns.TITLE)
   Settings.RegisterAddOnCategory(category)
 end
 
----------------------------------------------------------------------------
--- Minimap button and addon compartment
----------------------------------------------------------------------------
-
-local minimapButton
-
-local function OnLauncherClick(button)
-  if button == "RightButton" then
-    local enabled = ns.Set("enabled", not ns.db.enabled)
-    ns.Print(enabled and "enabled" or "disabled")
-    return
-  end
-  ns.ToggleOptions()
-end
-
-local function ShowLauncherTooltip(owner, anchor)
-  GameTooltip:SetOwner(owner, anchor)
-  GameTooltip:SetText(ns.TITLE, ACCENT.r + 0.15, ACCENT.g + 0.15, ACCENT.b + 0.15)
-  GameTooltip:AddLine(ns.GetStatusText(), 1, 1, 1)
-  GameTooltip:AddLine(" ")
-  GameTooltip:AddDoubleLine("Left-click", "Settings", 1, 0.82, 0, 1, 1, 1)
-  GameTooltip:AddDoubleLine("Right-click", ns.db.enabled and "Disable" or "Enable", 1, 0.82, 0, 1, 1, 1)
-  if owner == minimapButton then
-    GameTooltip:AddDoubleLine("Drag", "Move button", 1, 0.82, 0, 1, 1, 1)
-  end
-  GameTooltip:Show()
-end
-
-local function UpdateMinimapPosition()
-  local angle = math.rad(ns.db.minimap.angle)
-  local radius = Minimap:GetWidth() / 2 + 10
-  minimapButton:ClearAllPoints()
-  minimapButton:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
-end
-
-local function RefreshMinimapButton()
-  if not minimapButton then
-    return
-  end
-  -- The button only matters on characters that can use the overlay.
-  minimapButton:SetShown(ns.isDeathKnight and not ns.db.minimap.hide)
-  minimapButton.icon:SetDesaturated(not ns.db.enabled)
-  local shade = ns.db.enabled and 1 or 0.6
-  minimapButton.icon:SetVertexColor(shade, shade, shade)
-end
-
-local function OnMinimapDrag(self)
-  local mx, my = Minimap:GetCenter()
-  local px, py = GetCursorPosition()
-  local scale = Minimap:GetEffectiveScale()
-  ns.db.minimap.angle = math.deg(math.atan2(py / scale - my, px / scale - mx))
-  UpdateMinimapPosition()
-  if GameTooltip:IsOwned(self) then
-    GameTooltip:Hide()
-  end
-end
-
-local function CreateMinimapButton()
-  minimapButton = CreateFrame("Button", addonName .. "MinimapButton", Minimap)
-  minimapButton:SetSize(31, 31)
-  minimapButton:SetFrameStrata("MEDIUM")
-  minimapButton:SetFrameLevel(8)
-  minimapButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-  minimapButton:RegisterForDrag("LeftButton")
-  minimapButton:SetHighlightTexture(136477) -- Interface\Minimap\UI-Minimap-ZoomButton-Highlight
-
-  local background = minimapButton:CreateTexture(nil, "BACKGROUND")
-  background:SetSize(20, 20)
-  background:SetTexture(136467) -- Interface\Minimap\UI-Minimap-Background
-  background:SetPoint("TOPLEFT", 7, -5)
-
-  local icon = minimapButton:CreateTexture(nil, "ARTWORK")
-  icon:SetSize(17, 17)
-  icon:SetTexture(ns.ICON)
-  icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-  icon:SetPoint("TOPLEFT", 7, -6)
-  minimapButton.icon = icon
-
-  local border = minimapButton:CreateTexture(nil, "OVERLAY")
-  border:SetSize(50, 50)
-  border:SetTexture(136430) -- Interface\Minimap\MiniMap-TrackingBorder
-  border:SetPoint("TOPLEFT")
-
-  minimapButton:SetScript("OnClick", function(_, button)
-    OnLauncherClick(button)
-  end)
-  minimapButton:SetScript("OnEnter", function(self)
-    ShowLauncherTooltip(self, "ANCHOR_LEFT")
-  end)
-  minimapButton:SetScript("OnLeave", GameTooltip_Hide)
-  minimapButton:SetScript("OnDragStart", function(self)
-    self:LockHighlight()
-    self:SetScript("OnUpdate", OnMinimapDrag)
-  end)
-  minimapButton:SetScript("OnDragStop", function(self)
-    self:UnlockHighlight()
-    self:SetScript("OnUpdate", nil)
-  end)
-
-  UpdateMinimapPosition()
-  RefreshMinimapButton()
-end
-
-ns.OnChange(function(key)
-  if key == "minimap" or key == "enabled" or key == "*" then
-    RefreshMinimapButton()
-  end
-end)
-
--- Referenced from the TOC (AddonCompartmentFunc*).
-function BDKNeverOvercapRP_OnCompartmentClick(_, input)
-  -- Newer clients pass menu input data instead of the mouse button name.
-  OnLauncherClick(type(input) == "table" and input.buttonName or input)
-end
-
-function BDKNeverOvercapRP_OnCompartmentEnter(_, frame)
-  ShowLauncherTooltip(frame, "ANCHOR_LEFT")
-end
-
-function BDKNeverOvercapRP_OnCompartmentLeave()
-  GameTooltip:Hide()
-end
-
-ns.OnLogin(function()
-  RegisterSettingsCategory()
-  if ns.isDeathKnight then
-    CreateMinimapButton()
-  end
-end)
+ns.OnChange(RefreshAll)
+ns.OnLogin(RegisterSettingsCategory)

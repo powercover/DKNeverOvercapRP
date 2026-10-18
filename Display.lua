@@ -2,32 +2,21 @@ local addonName, ns = ...
 
 -- The overlay is fully event driven. Nothing runs per frame except a short
 -- fade OnUpdate that removes itself once the target opacity is reached, and
--- the spin/pulse animation groups, which only play while the aura is shown.
+-- the motion/pulse animation groups, which only play while the aura is shown.
 
 local POWER_TYPE = ns.POWER_TYPE
 local FADE_IN_SPEED = 5
 local FADE_OUT_SPEED = 3.5
 local SNAP = 0.004
 local EPSILON = 0.0001
+-- Aura diameter as a share of the screen height at 100% size.
+local AURA_SIZE = 0.55
 
--- Aura composition around a centre anchor. Offsets are in unscaled pixels.
-local PIECES = {
-  { kind = "side", point = "RIGHT", rel = "LEFT", x = 6, y = 0 },
-  { kind = "side", point = "LEFT", rel = "RIGHT", x = -6, y = 0, flipH = true },
-  { kind = "corner", point = "BOTTOMRIGHT", rel = "TOPLEFT", x = 8, y = -8 },
-  { kind = "corner", point = "BOTTOMLEFT", rel = "TOPRIGHT", x = -8, y = -8, flipH = true },
-  { kind = "corner", point = "TOPRIGHT", rel = "BOTTOMLEFT", x = 8, y = 8, flipV = true },
-  { kind = "corner", point = "TOPLEFT", rel = "BOTTOMRIGHT", x = -8, y = 8, flipH = true, flipV = true },
-}
-
-local SWIRLS = {
-  { rel = "TOPLEFT", duration = 35, degrees = 360 },
-  { rel = "BOTTOMRIGHT", duration = 31, degrees = -360 },
-}
-
-local root, anchor, pulseGate, pulseLayer, pulseAnim
-local pieces = {}
-local swirls = {}
+local root, anchor, pulseGate, pulseAura, pulseEdge
+local aura = {}
+local edge, edgePulse
+local motionAnims = {}
+local pulseAnims = {}
 local events = CreateFrame("Frame")
 
 local state = {
@@ -46,42 +35,82 @@ local intensityCurve, pulseCurve
 -- Frame construction
 ---------------------------------------------------------------------------
 
-local function NewTexture(parent, layer, sublevel)
+local function NewTexture(parent, file, layer, sublevel, alpha)
   local tex = parent:CreateTexture(nil, layer, nil, sublevel)
+  tex:SetTexture(ns.MEDIA .. file)
   tex:SetBlendMode("ADD")
+  tex:SetAlpha(alpha or 1)
   return tex
 end
 
-local function SetFlip(tex, flipH, flipV)
-  local left, right, top, bottom = 0, 1, 0, 1
-  if flipH then
-    left, right = 1, 0
+local function Spin(tex, seconds, degrees)
+  local group = tex:CreateAnimationGroup()
+  group:SetLooping("REPEAT")
+  local rotation = group:CreateAnimation("Rotation")
+  rotation:SetDegrees(degrees)
+  rotation:SetDuration(seconds)
+  motionAnims[#motionAnims + 1] = group
+end
+
+local function Flicker(tex, from, to, seconds)
+  local group = tex:CreateAnimationGroup()
+  group:SetLooping("BOUNCE")
+  local fade = group:CreateAnimation("Alpha")
+  fade:SetFromAlpha(from)
+  fade:SetToAlpha(to)
+  fade:SetDuration(seconds)
+  fade:SetSmoothing("IN_OUT")
+  motionAnims[#motionAnims + 1] = group
+end
+
+local function PulseGroup(frame, scaleTo)
+  local group = frame:CreateAnimationGroup()
+  group:SetLooping("BOUNCE")
+  local fade = group:CreateAnimation("Alpha")
+  fade:SetFromAlpha(0)
+  fade:SetToAlpha(1)
+  fade:SetDuration(0.55)
+  fade:SetSmoothing("IN_OUT")
+  if scaleTo then
+    local grow = group:CreateAnimation("Scale")
+    grow:SetScaleFrom(1, 1)
+    grow:SetScaleTo(scaleTo, scaleTo)
+    grow:SetDuration(0.55)
+    grow:SetSmoothing("IN_OUT")
   end
-  if flipV then
-    top, bottom = 1, 0
-  end
-  tex:SetTexCoord(left, right, top, bottom)
+  pulseAnims[#pulseAnims + 1] = group
+end
+
+local function ShowsAura()
+  return ns.db.style ~= "edge"
+end
+
+local function ShowsEdge()
+  return ns.db.style ~= "aura"
 end
 
 local function StartAnimations()
-  for _, swirl in ipairs(swirls) do
-    swirl:SetShown(ns.db.spin)
-    if ns.db.spin then
-      swirl.anim:Play()
+  for _, group in ipairs(motionAnims) do
+    if ns.db.motion then
+      group:Play()
     else
-      swirl.anim:Stop()
+      group:Stop()
     end
   end
   if state.pulsing then
-    pulseAnim:Play()
+    for _, group in ipairs(pulseAnims) do
+      group:Play()
+    end
   end
 end
 
 local function StopAnimations()
-  for _, swirl in ipairs(swirls) do
-    swirl.anim:Stop()
+  for _, group in ipairs(motionAnims) do
+    group:Stop()
   end
-  pulseAnim:Stop()
+  for _, group in ipairs(pulseAnims) do
+    group:Stop()
+  end
 end
 
 local function EnsureUI()
@@ -98,44 +127,38 @@ local function EnsureUI()
 
   anchor = CreateFrame("Frame", nil, root)
 
-  -- Gate carries the "near cap" opacity (0 or 1, possibly secret); the
-  -- layer inside it carries the looping pulse animation.
+  aura.glow = NewTexture(root, "glow", "BACKGROUND", 0, 0.55)
+  aura.ring = NewTexture(root, "ring", "ARTWORK", 0, 0.9)
+  aura.runes = NewTexture(root, "runes", "ARTWORK", 1, 0.75)
+  aura.core = NewTexture(root, "ring_core", "OVERLAY", 0, 0.85)
+  edge = NewTexture(root, "edge", "BACKGROUND", 1, 0.85)
+  edge:SetAllPoints(root)
+
+  Spin(aura.runes, 60, -360)
+  Spin(aura.ring, 120, 360)
+  Flicker(aura.core, 0.55, 0.95, 1.4)
+
+  -- The gate carries the "near cap" opacity (0 or 1, possibly secret); the
+  -- frames inside it carry the looping pulse animations.
   pulseGate = CreateFrame("Frame", nil, root)
   pulseGate:SetAllPoints(root)
   pulseGate:SetAlpha(0)
-  pulseLayer = CreateFrame("Frame", nil, pulseGate)
-  pulseLayer:SetAllPoints(pulseGate)
-  pulseLayer:SetAlpha(0)
 
-  pulseAnim = pulseLayer:CreateAnimationGroup()
-  pulseAnim:SetLooping("BOUNCE")
-  local fade = pulseAnim:CreateAnimation("Alpha")
-  fade:SetFromAlpha(0)
-  fade:SetToAlpha(0.9)
-  fade:SetDuration(0.55)
-  fade:SetSmoothing("IN_OUT")
+  pulseAura = CreateFrame("Frame", nil, pulseGate)
+  pulseAura:SetPoint("CENTER", anchor)
+  pulseAura:SetAlpha(0)
+  aura.pulseRing = NewTexture(pulseAura, "ring", "ARTWORK")
+  aura.pulseRing:SetAllPoints(pulseAura)
+  aura.pulseGlow = NewTexture(pulseAura, "glow", "BACKGROUND", 0, 0.6)
+  aura.pulseGlow:SetPoint("CENTER")
+  PulseGroup(pulseAura, 1.08)
 
-  for i, info in ipairs(PIECES) do
-    local layer = info.kind == "side" and "OVERLAY" or "ARTWORK"
-    local base = NewTexture(root, layer)
-    local glow = NewTexture(pulseLayer, layer)
-    for _, tex in ipairs({ base, glow }) do
-      SetFlip(tex, info.flipH, info.flipV)
-    end
-    pieces[i] = { info = info, base = base, glow = glow }
-  end
-
-  for i, info in ipairs(SWIRLS) do
-    local tex = NewTexture(root, "ARTWORK", -1)
-    tex:SetPoint("CENTER", anchor, info.rel, 0, 0)
-    local anim = tex:CreateAnimationGroup()
-    anim:SetLooping("REPEAT")
-    local rotation = anim:CreateAnimation("Rotation")
-    rotation:SetDegrees(info.degrees)
-    rotation:SetDuration(info.duration)
-    tex.anim = anim
-    swirls[i] = tex
-  end
+  pulseEdge = CreateFrame("Frame", nil, pulseGate)
+  pulseEdge:SetAllPoints(root)
+  pulseEdge:SetAlpha(0)
+  edgePulse = NewTexture(pulseEdge, "edge", "BACKGROUND", 1, 0.7)
+  edgePulse:SetAllPoints(pulseEdge)
+  PulseGroup(pulseEdge)
 
   root:SetScript("OnShow", StartAnimations)
   root:SetScript("OnHide", StopAnimations)
@@ -153,62 +176,54 @@ function ns.LayoutOverlay()
     return
   end
   local db = ns.db
-  local scale = db.scale / 100
-  local base = math.min(root:GetWidth(), root:GetHeight())
-  if base <= 0 then
-    base = 768
+  local height = root:GetHeight()
+  if height <= 0 then
+    height = 768
   end
-
-  local center = math.max(96, base * 0.13) * scale
-  local long = math.max(130, base * 0.18) * scale
-  local short = long * 0.5
-  local corner = long * 0.52
-  local swirl = corner * 0.85
+  local size = height * AURA_SIZE * db.scale / 100
 
   anchor:ClearAllPoints()
   anchor:SetPoint("CENTER", root, "CENTER", 0, db.offsetY)
-  anchor:SetSize(center, center)
+  anchor:SetSize(size, size)
 
-  for _, piece in ipairs(pieces) do
-    local info = piece.info
-    for _, tex in ipairs({ piece.base, piece.glow }) do
-      tex:ClearAllPoints()
-      tex:SetPoint(info.point, anchor, info.rel, info.x * scale, info.y * scale)
-      if info.kind == "side" then
-        tex:SetSize(short, long)
-      else
-        tex:SetSize(corner, corner)
-      end
-    end
+  for _, tex in ipairs({ aura.ring, aura.runes, aura.core }) do
+    tex:ClearAllPoints()
+    tex:SetPoint("CENTER", anchor)
+    tex:SetSize(size, size)
   end
+  aura.glow:ClearAllPoints()
+  aura.glow:SetPoint("CENTER", anchor)
+  aura.glow:SetSize(size * 1.25, size * 1.25)
 
-  for _, tex in ipairs(swirls) do
-    tex:SetSize(swirl, swirl)
-  end
+  pulseAura:SetSize(size, size)
+  aura.pulseGlow:SetSize(size * 1.25, size * 1.25)
 end
 
-local function ApplyTextures()
-  local db = ns.db
-  local preset = ns.GetTexturePreset()
-  local r, g, b = 1, 1, 1
-  if db.useTint then
-    r, g, b = db.tint.r, db.tint.g, db.tint.b
-  end
+local function ApplyAppearance()
+  local color = ns.GetActiveColor()
+  local r, g, b = color.r, color.g, color.b
+  -- The core line burns closer to white.
+  local lr, lg, lb = r + (1 - r) * 0.55, g + (1 - g) * 0.55, b + (1 - b) * 0.55
 
-  local function Paint(tex, file)
-    tex:SetTexture(file)
-    tex:SetDesaturated(db.useTint)
-    tex:SetVertexColor(r, g, b)
+  for key, tex in pairs(aura) do
+    if key == "core" then
+      tex:SetVertexColor(lr, lg, lb)
+    else
+      tex:SetVertexColor(r, g, b)
+    end
   end
+  edge:SetVertexColor(r, g, b)
+  edgePulse:SetVertexColor(r, g, b)
 
-  for _, piece in ipairs(pieces) do
-    local file = piece.info.kind == "side" and preset.side or preset.corner
-    Paint(piece.base, file)
-    Paint(piece.glow, file)
+  local showAura, showEdge = ShowsAura(), ShowsEdge()
+  for key, tex in pairs(aura) do
+    if key ~= "pulseRing" and key ~= "pulseGlow" then
+      tex:SetShown(showAura)
+    end
   end
-  for _, tex in ipairs(swirls) do
-    Paint(tex, preset.corner)
-  end
+  pulseAura:SetShown(showAura)
+  edge:SetShown(showEdge)
+  pulseEdge:SetShown(showEdge)
 end
 
 -- Curves let the client map secret power values to opacity for us.
@@ -243,6 +258,12 @@ local function BuildCurves()
   end
 end
 
+local function RefreshAppearance()
+  ns.LayoutOverlay()
+  ApplyAppearance()
+  BuildCurves()
+end
+
 ---------------------------------------------------------------------------
 -- Opacity
 ---------------------------------------------------------------------------
@@ -260,10 +281,12 @@ end
 local function SetPulsing(pulsing)
   state.pulsing = pulsing
   pulseGate:SetAlpha(pulsing and 1 or 0)
-  if pulsing and root:IsShown() then
-    pulseAnim:Play()
-  elseif not pulsing then
-    pulseAnim:Stop()
+  for _, group in ipairs(pulseAnims) do
+    if pulsing and root:IsShown() then
+      group:Play()
+    elseif not pulsing then
+      group:Stop()
+    end
   end
 end
 
@@ -336,7 +359,9 @@ local function ApplySecret()
   if gate ~= nil then
     state.pulsing = true
     pulseGate:SetAlpha(gate)
-    pulseAnim:Play()
+    for _, group in ipairs(pulseAnims) do
+      group:Play()
+    end
   else
     SetPulsing(false)
   end
@@ -414,15 +439,13 @@ function ns.SetPreview(on)
     return
   end
   EnsureUI()
-  ns.LayoutOverlay()
-  ApplyTextures()
-  BuildCurves()
+  RefreshAppearance()
   state.preview = on
   Evaluate()
   ns.Notify("state")
 end
 
-events:SetScript("OnEvent", function(_, event, unit, powerType)
+events:SetScript("OnEvent", function(_, event, _, powerType)
   if event == "UNIT_POWER_UPDATE" then
     if powerType == ns.POWER_TOKEN then
       Evaluate()
@@ -437,19 +460,18 @@ events:SetScript("OnEvent", function(_, event, unit, powerType)
     state.inCombat = false
   elseif event == "PLAYER_ENTERING_WORLD" then
     state.inCombat = InCombatLockdown()
+  elseif event == "PLAYER_SPECIALIZATION_CHANGED" then
+    ApplyAppearance()
   end
-  -- Spec change or loading screen.
   UpdateEngine()
   Evaluate()
 end)
 
 ns.OnChange(function(key)
-  if key == "state" or key == "minimap" or not root then
+  if key == "state" or not root then
     return
   end
-  ns.LayoutOverlay()
-  ApplyTextures()
-  BuildCurves()
+  RefreshAppearance()
   if root:IsShown() then
     StartAnimations()
   end
@@ -463,9 +485,7 @@ ns.OnLogin(function()
     return
   end
   EnsureUI()
-  ns.LayoutOverlay()
-  ApplyTextures()
-  BuildCurves()
+  RefreshAppearance()
   events:RegisterUnitEvent("PLAYER_SPECIALIZATION_CHANGED", "player")
   events:RegisterEvent("PLAYER_ENTERING_WORLD")
   UpdateEngine()

@@ -1,0 +1,12 @@
+## Interface: 120105, 120100
+## Title: |cffc41e3aDK|r Never Overcap RP
+## Notes: Runic power overlay for every Death Knight spec: a glowing rune aura as you near the cap.
+## Author: powercover
+## Version: @project-version@
+## Category: Combat
+## IconTexture: Interface\AddOns\DKNeverOvercapRP\Media\logo
+## SavedVariables: DKNORP_DB
+
+Core.lua
+Display.lua
+Options.lua
