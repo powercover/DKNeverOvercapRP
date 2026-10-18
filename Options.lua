@@ -1,20 +1,23 @@
 local addonName, ns = ...
 
 -- Settings page under Options > AddOns. Every control is drawn from plain
--- textures (no Blizzard widget templates) for a flat, modern look.
+-- textures (no Blizzard widget templates) with the bundled Inter font.
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
-local CIRCLE = ns.MEDIA .. "circle"
-local HEADER_HEIGHT = 92
+local MARGIN = 16
 local GAP = 12
+local HEADER_HEIGHT = 68
 
+-- Opaque colors only: translucent fills show seams where shapes meet.
 local THEME = {
-  card = { 0.075, 0.075, 0.09, 0.94 },
-  inset = { 0.14, 0.14, 0.17, 1 },
-  hover = { 1, 1, 1, 0.045 },
-  off = { 0.26, 0.26, 0.30, 1 },
-  text = { 0.95, 0.95, 0.97 },
-  muted = { 0.58, 0.59, 0.65 },
+  card = { 0.098, 0.098, 0.110 },
+  border = { 0.165, 0.165, 0.180 },
+  hover = { 0.130, 0.130, 0.145 },
+  well = { 0.070, 0.070, 0.080 },
+  raised = { 0.215, 0.215, 0.235 },
+  off = { 0.235, 0.235, 0.260 },
+  text = { 0.925, 0.925, 0.945 },
+  muted = { 0.560, 0.565, 0.610 },
 }
 
 local panel, content
@@ -31,21 +34,28 @@ local function Track(control)
 end
 
 ---------------------------------------------------------------------------
--- Primitives
+-- Fonts
 ---------------------------------------------------------------------------
 
-local function MakeFont(name, size)
+-- Inter covers Latin and Cyrillic; other clients keep the game font.
+local USE_INTER = not ({ koKR = true, zhCN = true, zhTW = true })[GetLocale()]
+
+local function MakeFont(name, weight, size)
   local font = CreateFont(addonName .. name)
-  font:SetFont(STANDARD_TEXT_FONT, size, "")
-  font:SetShadowColor(0, 0, 0, 0.6)
-  font:SetShadowOffset(1, -1)
+  if USE_INTER then
+    font:SetFont(ns.MEDIA .. "Fonts\\Inter-" .. weight .. ".ttf", size, "")
+  else
+    font:SetFont(STANDARD_TEXT_FONT, size, "")
+  end
+  font:SetShadowOffset(0, 0)
   return font
 end
 
 local FONT = {
-  title = MakeFont("FontTitle", 22),
-  body = MakeFont("FontBody", 13),
-  small = MakeFont("FontSmall", 11),
+  title = MakeFont("FontTitle", "SemiBold", 15),
+  heading = MakeFont("FontHeading", "SemiBold", 11),
+  label = MakeFont("FontLabel", "Medium", 12),
+  small = MakeFont("FontSmall", "Regular", 11),
 }
 
 local function Text(parent, font, color)
@@ -53,30 +63,51 @@ local function Text(parent, font, color)
   fs:SetFontObject(font)
   fs:SetTextColor(color[1], color[2], color[3])
   fs:SetJustifyH("LEFT")
+  fs:SetWordWrap(false)
   return fs
+end
+
+---------------------------------------------------------------------------
+-- Shapes
+---------------------------------------------------------------------------
+
+-- Pick the circle texture closest to twice the drawn size, so the client
+-- never shrinks it far enough to alias.
+local function CircleFile(size)
+  return ns.MEDIA .. (size <= 16 and "circle32" or "circle")
+end
+
+local function Smooth(tex)
+  if tex.SetSnapToPixelGrid then
+    tex:SetSnapToPixelGrid(false)
+    tex:SetTexelSnappingBias(0)
+  end
 end
 
 local function Circle(parent, size, layer, sublevel)
   local tex = parent:CreateTexture(nil, layer or "ARTWORK", nil, sublevel)
-  tex:SetTexture(CIRCLE)
+  tex:SetTexture(CircleFile(size))
   tex:SetSize(size, size)
+  Smooth(tex)
   return tex
 end
 
 -- Rounded rectangle: four quarter-circle corners plus three strips, all
--- drawn on `owner` and stretched over `region` (owner by default).
+-- drawn on `owner` and stretched over `region` (owner by default), inset
+-- by `inset` pixels.
 local Rounded = {}
 Rounded.__index = Rounded
 
 local CORNERS = {
-  TOPLEFT = { 0, 0.5, 0, 0.5 },
-  TOPRIGHT = { 0.5, 1, 0, 0.5 },
-  BOTTOMLEFT = { 0, 0.5, 0.5, 1 },
-  BOTTOMRIGHT = { 0.5, 1, 0.5, 1 },
+  { "TOPLEFT", 0, 0.5, 0, 0.5, 1, -1 },
+  { "TOPRIGHT", 0.5, 1, 0, 0.5, -1, -1 },
+  { "BOTTOMLEFT", 0, 0.5, 0.5, 1, 1, 1 },
+  { "BOTTOMRIGHT", 0.5, 1, 0.5, 1, -1, 1 },
 }
 
-local function NewRounded(owner, radius, layer, sublevel, region)
+local function NewRounded(owner, radius, layer, sublevel, region, inset)
   region = region or owner
+  inset = inset or 0
   local self = setmetatable({ parts = {} }, Rounded)
   local function Part(file)
     local tex = owner:CreateTexture(nil, layer, nil, sublevel)
@@ -84,28 +115,30 @@ local function NewRounded(owner, radius, layer, sublevel, region)
     self.parts[#self.parts + 1] = tex
     return tex
   end
-  for point, coords in pairs(CORNERS) do
-    local corner = Part(CIRCLE)
-    corner:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+  local file = CircleFile(radius * 2)
+  for _, c in ipairs(CORNERS) do
+    local corner = Part(file)
+    corner:SetTexCoord(c[2], c[3], c[4], c[5])
     corner:SetSize(radius, radius)
-    corner:SetPoint(point, region, point)
+    corner:SetPoint(c[1], region, c[1], c[6] * inset, c[7] * inset)
   end
   local middle = Part(WHITE)
-  middle:SetPoint("TOPLEFT", region, "TOPLEFT", radius, 0)
-  middle:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", -radius, 0)
+  middle:SetPoint("TOPLEFT", region, "TOPLEFT", inset + radius, -inset)
+  middle:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", -inset - radius, inset)
   local left = Part(WHITE)
-  left:SetPoint("TOPLEFT", region, "TOPLEFT", 0, -radius)
-  left:SetPoint("BOTTOMRIGHT", region, "BOTTOMLEFT", radius, radius)
+  left:SetPoint("TOPLEFT", region, "TOPLEFT", inset, -inset - radius)
+  left:SetPoint("BOTTOMRIGHT", region, "BOTTOMLEFT", inset + radius, inset + radius)
   local right = Part(WHITE)
-  right:SetPoint("TOPLEFT", region, "TOPRIGHT", -radius, -radius)
-  right:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", 0, radius)
+  right:SetPoint("TOPLEFT", region, "TOPRIGHT", -inset - radius, -inset - radius)
+  right:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", -inset, inset + radius)
   return self
 end
 
-function Rounded:SetColor(r, g, b, a)
+function Rounded:SetColor(r, g, b)
   for _, tex in ipairs(self.parts) do
-    tex:SetVertexColor(r, g, b, a or 1)
+    tex:SetVertexColor(r, g, b)
   end
+  return self
 end
 
 function Rounded:SetShown(shown)
@@ -113,6 +146,18 @@ function Rounded:SetShown(shown)
     tex:SetShown(shown)
   end
 end
+
+-- A rounded box with a 1px border.
+local function Box(owner, radius, fill, border, layer)
+  layer = layer or "BACKGROUND"
+  local outer = NewRounded(owner, radius, layer, -2):SetColor(unpack(border))
+  local inner = NewRounded(owner, radius - 1, layer, -1, nil, 1):SetColor(unpack(fill))
+  return inner, outer
+end
+
+---------------------------------------------------------------------------
+-- Behaviour helpers
+---------------------------------------------------------------------------
 
 local function ShowTooltip(owner, title, body)
   if not body then
@@ -126,53 +171,6 @@ end
 
 local function PlayToggleSound(on)
   PlaySound(on and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
-end
-
----------------------------------------------------------------------------
--- Controls
----------------------------------------------------------------------------
-
-local function CreateSwitch(parent)
-  local switch = CreateFrame("Frame", nil, parent)
-  switch:SetSize(36, 20)
-  local track = NewRounded(switch, 10, "ARTWORK")
-  local knob = Circle(switch, 14, "OVERLAY")
-  function switch.SetOn(_, on)
-    knob:ClearAllPoints()
-    if on then
-      knob:SetPoint("RIGHT", -3, 0)
-      track:SetColor(Accent())
-    else
-      knob:SetPoint("LEFT", 3, 0)
-      track:SetColor(unpack(THEME.off))
-    end
-  end
-  return switch
-end
-
-local function PillButton(parent, label, width, primary)
-  local button = CreateFrame("Button", nil, parent)
-  button:SetSize(width, 28)
-  local bg = NewRounded(button, 14, "BACKGROUND")
-  local text = Text(button, FONT.body, THEME.text)
-  text:SetPoint("CENTER")
-  text:SetText(label)
-  button.text = text
-
-  local function Paint()
-    local hover = button:IsMouseOver()
-    if primary then
-      local r, g, b = Accent()
-      local k = hover and 1.2 or 1
-      bg:SetColor(math.min(1, r * k), math.min(1, g * k), math.min(1, b * k), 0.9)
-    else
-      bg:SetColor(1, 1, 1, hover and 0.14 or 0.08)
-    end
-  end
-  button:SetScript("OnEnter", Paint)
-  button:SetScript("OnLeave", Paint)
-  button.Refresh = Paint
-  return Track(button)
 end
 
 local function OpenColorPicker(color, apply)
@@ -191,6 +189,55 @@ local function OpenColorPicker(color, apply)
 end
 
 ---------------------------------------------------------------------------
+-- Controls
+---------------------------------------------------------------------------
+
+local function CreateSwitch(parent)
+  local switch = CreateFrame("Frame", nil, parent)
+  switch:SetSize(28, 16)
+  local track = NewRounded(switch, 8, "ARTWORK")
+  local knob = Circle(switch, 12, "OVERLAY")
+  function switch.SetOn(_, on)
+    knob:ClearAllPoints()
+    if on then
+      knob:SetPoint("RIGHT", -2, 0)
+      track:SetColor(Accent())
+    else
+      knob:SetPoint("LEFT", 2, 0)
+      track:SetColor(unpack(THEME.off))
+    end
+  end
+  return switch
+end
+
+local function CreateButton(parent, label, width, primary)
+  local button = CreateFrame("Button", nil, parent)
+  button:SetSize(width, 24)
+  local fill, border = Box(button, 6, THEME.card, THEME.border)
+  local text = Text(button, FONT.label, THEME.text)
+  text:SetPoint("CENTER", 0, 0)
+  text:SetText(label)
+  button.text = text
+
+  local function Paint()
+    local hover = button:IsMouseOver()
+    if primary then
+      local r, g, b = Accent()
+      local k = hover and 0.85 or 0.72
+      fill:SetColor(r * k, g * k, b * k)
+      border:SetColor(r * k, g * k, b * k)
+    else
+      fill:SetColor(unpack(hover and THEME.hover or THEME.card))
+      border:SetColor(unpack(THEME.border))
+    end
+  end
+  button:SetScript("OnEnter", Paint)
+  button:SetScript("OnLeave", Paint)
+  button.Refresh = Paint
+  return Track(button)
+end
+
+---------------------------------------------------------------------------
 -- Cards and rows
 ---------------------------------------------------------------------------
 
@@ -199,15 +246,15 @@ Card.__index = Card
 
 local function NewCard(title)
   local frame = CreateFrame("Frame", nil, content)
-  NewRounded(frame, 12, "BACKGROUND", -1):SetColor(unpack(THEME.card))
-  local label = Text(frame, FONT.small, THEME.muted)
-  label:SetPoint("TOPLEFT", 18, -16)
-  label:SetText(title:upper())
-  return setmetatable({ frame = frame, y = -36 }, Card)
+  Box(frame, 8, THEME.card, THEME.border)
+  local heading = Text(frame, FONT.heading, THEME.muted)
+  heading:SetPoint("TOPLEFT", 14, -12)
+  heading:SetText(title)
+  return setmetatable({ frame = frame, y = -30 }, Card)
 end
 
 function Card:Finish()
-  self.frame:SetHeight(-self.y + 10)
+  self.frame:SetHeight(-self.y + 6)
   return self
 end
 
@@ -215,16 +262,15 @@ end
 -- interactive widget (sliders, segmented bars) only show a tooltip.
 function Card:Row(height, label, tooltip, clickable)
   local row = CreateFrame(clickable and "Button" or "Frame", nil, self.frame)
-  row:SetPoint("TOPLEFT", self.frame, "TOPLEFT", 8, self.y)
-  row:SetPoint("TOPRIGHT", self.frame, "TOPRIGHT", -8, self.y)
+  row:SetPoint("TOPLEFT", self.frame, "TOPLEFT", 6, self.y)
+  row:SetPoint("TOPRIGHT", self.frame, "TOPRIGHT", -6, self.y)
   row:SetHeight(height)
   row:EnableMouse(true)
   self.y = self.y - height
 
   local hover
   if clickable then
-    hover = NewRounded(row, 8, "BACKGROUND")
-    hover:SetColor(unpack(THEME.hover))
+    hover = NewRounded(row, 5, "BACKGROUND"):SetColor(unpack(THEME.hover))
     hover:SetShown(false)
   end
   row:SetScript("OnEnter", function()
@@ -242,20 +288,24 @@ function Card:Row(height, label, tooltip, clickable)
   return row
 end
 
-function Card:Toggle(label, tooltip, get, set)
-  local row = self:Row(36, label, tooltip, true)
-  local text = Text(row, FONT.body, THEME.text)
-  text:SetPoint("LEFT", 10, 0)
+function Card:Toggle(label, tooltip, get, set, isEnabled)
+  local row = self:Row(28, label, tooltip, true)
+  local text = Text(row, FONT.label, THEME.text)
+  text:SetPoint("LEFT", 8, 0)
   text:SetText(label)
   local switch = CreateSwitch(row)
-  switch:SetPoint("RIGHT", -10, 0)
+  switch:SetPoint("RIGHT", -8, 0)
   row:SetScript("OnClick", function()
+    if isEnabled and not isEnabled() then
+      return
+    end
     local on = not get()
     PlayToggleSound(on)
     set(on)
   end)
   row.Refresh = function()
     switch:SetOn(get())
+    row:SetAlpha((not isEnabled or isEnabled()) and 1 or 0.4)
   end
   return Track(row)
 end
@@ -270,19 +320,19 @@ end
 
 function Card:Slider(label, tooltip, key, format, isEnabled)
   local limit = ns.LIMITS[key]
-  local row = self:Row(54, label, tooltip, false)
+  local row = self:Row(40, label, tooltip, false)
 
-  local text = Text(row, FONT.body, THEME.text)
-  text:SetPoint("TOPLEFT", 10, -9)
+  local text = Text(row, FONT.label, THEME.text)
+  text:SetPoint("TOPLEFT", 8, -6)
   text:SetText(label)
-  local value = Text(row, FONT.body, THEME.text)
-  value:SetPoint("TOPRIGHT", -10, -9)
+  local value = Text(row, FONT.small, THEME.muted)
+  value:SetPoint("TOPRIGHT", -8, -7)
   value:SetJustifyH("RIGHT")
 
   local slider = CreateFrame("Slider", nil, row)
-  slider:SetPoint("BOTTOMLEFT", 10, 8)
-  slider:SetPoint("BOTTOMRIGHT", -10, 8)
-  slider:SetHeight(16)
+  slider:SetPoint("BOTTOMLEFT", 8, 5)
+  slider:SetPoint("BOTTOMRIGHT", -8, 5)
+  slider:SetHeight(14)
   slider:SetOrientation("HORIZONTAL")
   slider:SetMinMaxValues(limit[1], limit[2])
   slider:SetValueStep(limit[3])
@@ -295,19 +345,19 @@ function Card:Slider(label, tooltip, key, format, isEnabled)
   trackRegion:SetHeight(4)
   NewRounded(slider, 2, "BACKGROUND", 1, trackRegion):SetColor(unpack(THEME.off))
 
-  local thumb = Circle(slider, 14, "OVERLAY")
-  slider:SetThumbTexture(thumb)
-
   local fillRegion = slider:CreateTexture(nil, "ARTWORK")
   fillRegion:SetPoint("LEFT", trackRegion)
   fillRegion:SetHeight(4)
   local fill = NewRounded(slider, 2, "ARTWORK", 1, fillRegion)
 
+  local thumb = Circle(slider, 12, "OVERLAY")
+  slider:SetThumbTexture(thumb)
+
   -- The thumb travels between half its width from either end.
   local function UpdateFill()
     local width = slider:GetWidth() or 0
     local t = (slider:GetValue() - limit[1]) / (limit[2] - limit[1])
-    fillRegion:SetWidth(math.max(4, 7 + t * (width - 14)))
+    fillRegion:SetWidth(math.max(4, 6 + t * (width - 12)))
   end
 
   slider:SetScript("OnValueChanged", function(_, v)
@@ -323,15 +373,13 @@ function Card:Slider(label, tooltip, key, format, isEnabled)
   end)
   slider:SetScript("OnLeave", GameTooltip_Hide)
 
-  row.slider = slider
   row.Refresh = function()
     slider.suppress = true
     slider:SetValue(ns.db[key])
     slider.suppress = false
     value:SetText(format(ns.db[key]))
-    local r, g, b = Accent()
-    fill:SetColor(r, g, b)
-    value:SetTextColor(r, g, b)
+    UpdateFill()
+    fill:SetColor(Accent())
     local enabled = not isEnabled or isEnabled()
     if enabled then
       slider:Enable()
@@ -343,69 +391,95 @@ function Card:Slider(label, tooltip, key, format, isEnabled)
   return Track(row)
 end
 
-function Card:Segmented(label, tooltip, options, get, set)
-  local row = self:Row(64, label, tooltip, false)
-  local text = Text(row, FONT.body, THEME.text)
-  text:SetPoint("TOPLEFT", 10, -9)
+local TILE_COLUMNS = 4
+local TILE_HEIGHT = 56
+local TILE_GAP = 6
+
+function Card:Patterns(label)
+  local rows = math.ceil(#ns.PATTERNS / TILE_COLUMNS)
+  local row = self:Row(26 + rows * TILE_HEIGHT + (rows - 1) * TILE_GAP + 8, label, nil, false)
+  local text = Text(row, FONT.label, THEME.text)
+  text:SetPoint("TOPLEFT", 8, -6)
   text:SetText(label)
 
-  local bar = CreateFrame("Frame", nil, row)
-  bar:SetPoint("BOTTOMLEFT", 10, 8)
-  bar:SetPoint("BOTTOMRIGHT", -10, 8)
-  bar:SetHeight(30)
-  NewRounded(bar, 9, "BACKGROUND"):SetColor(unpack(THEME.inset))
+  local grid = CreateFrame("Frame", nil, row)
+  grid:SetPoint("TOPLEFT", 8, -26)
+  grid:SetPoint("BOTTOMRIGHT", -8, 8)
 
-  local buttons = {}
-  for i, option in ipairs(options) do
-    local button = CreateFrame("Button", nil, bar)
-    button:SetHeight(24)
-    button.bg = NewRounded(button, 7, "ARTWORK")
-    button.text = Text(button, FONT.body, THEME.muted)
-    button.text:SetPoint("CENTER")
-    button.text:SetText(option.name)
-    button:SetScript("OnClick", function()
+  local tiles = {}
+  for i, pattern in ipairs(ns.PATTERNS) do
+    local tile = CreateFrame("Button", nil, grid)
+    tile:SetHeight(TILE_HEIGHT)
+    tile.fill, tile.border = Box(tile, 6, THEME.well, THEME.border)
+
+    local icon = tile:CreateTexture(nil, "ARTWORK")
+    icon:SetTexture(ns.MEDIA .. pattern.icon)
+    icon:SetBlendMode("ADD")
+    if pattern.screen then
+      icon:SetSize(40, 24)
+      -- A small "screen" behind the icon.
+      NewRounded(tile, 2, "ARTWORK", -1, icon):SetColor(unpack(THEME.border))
+    else
+      icon:SetSize(30, 30)
+    end
+    icon:SetPoint("CENTER", 0, 7)
+    Smooth(icon)
+    tile.icon = icon
+
+    local name = Text(tile, FONT.small, THEME.muted)
+    name:SetPoint("BOTTOM", 0, 6)
+    name:SetJustifyH("CENTER")
+    name:SetText(pattern.name)
+    tile.name = name
+
+    tile:SetScript("OnClick", function()
       PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
-      set(option.key)
+      ns.Set("pattern", pattern.key)
     end)
-    button:SetScript("OnEnter", function()
-      if get() ~= option.key then
-        button.text:SetTextColor(unpack(THEME.text))
+    tile:SetScript("OnEnter", function()
+      if ns.db.pattern ~= pattern.key then
+        tile.fill:SetColor(unpack(THEME.hover))
       end
-      ShowTooltip(button, label, tooltip)
     end)
-    button:SetScript("OnLeave", function()
+    tile:SetScript("OnLeave", function()
       row.Refresh()
-      GameTooltip:Hide()
     end)
-    buttons[i] = button
+    tile.key = pattern.key
+    tiles[i] = tile
   end
 
   local function Layout(width)
     if not width or width <= 0 then
       return
     end
-    local each = (width - 6) / #buttons
-    for i, button in ipairs(buttons) do
-      button:ClearAllPoints()
-      button:SetWidth(each)
-      button:SetPoint("LEFT", bar, "LEFT", 3 + (i - 1) * each, 0)
+    local each = (width - (TILE_COLUMNS - 1) * TILE_GAP) / TILE_COLUMNS
+    for i, tile in ipairs(tiles) do
+      local col = (i - 1) % TILE_COLUMNS
+      local line = math.floor((i - 1) / TILE_COLUMNS)
+      tile:ClearAllPoints()
+      tile:SetWidth(each)
+      tile:SetPoint("TOPLEFT", grid, "TOPLEFT", col * (each + TILE_GAP), -line * (TILE_HEIGHT + TILE_GAP))
     end
   end
-  bar:SetScript("OnSizeChanged", function(_, width)
+  grid:SetScript("OnSizeChanged", function(_, width)
     Layout(width)
   end)
 
   row.Refresh = function()
-    Layout(bar:GetWidth())
+    Layout(grid:GetWidth())
     local r, g, b = Accent()
-    for i, button in ipairs(buttons) do
-      local selected = get() == options[i].key
-      button.bg:SetShown(selected)
-      button.bg:SetColor(r, g, b, 0.85)
+    for _, tile in ipairs(tiles) do
+      local selected = ns.db.pattern == tile.key
+      tile.icon:SetVertexColor(r, g, b)
+      tile.icon:SetAlpha(selected and 1 or 0.6)
       if selected then
-        button.text:SetTextColor(1, 1, 1)
+        tile.fill:SetColor(unpack(THEME.raised))
+        tile.border:SetColor(r * 0.8, g * 0.8, b * 0.8)
+        tile.name:SetTextColor(unpack(THEME.text))
       else
-        button.text:SetTextColor(unpack(THEME.muted))
+        tile.fill:SetColor(unpack(tile:IsMouseOver() and THEME.hover or THEME.well))
+        tile.border:SetColor(unpack(THEME.border))
+        tile.name:SetTextColor(unpack(THEME.muted))
       end
     end
   end
@@ -414,44 +488,50 @@ end
 
 function Card:Spec(specIndex)
   local name, icon = ns.GetSpecInfo(specIndex)
-  local row = self:Row(42, name, "Show the overlay while you are in " .. name .. ". Click the dot to pick this spec's color.", true)
+  local row = self:Row(30, name, "Show the overlay while you are in " .. name .. ". Click the dot to pick this spec's color.", true)
 
   local iconTex = row:CreateTexture(nil, "ARTWORK")
-  iconTex:SetSize(24, 24)
-  iconTex:SetPoint("LEFT", 10, 0)
+  iconTex:SetSize(18, 18)
+  iconTex:SetPoint("LEFT", 8, 0)
   if icon then
     iconTex:SetTexture(icon)
   end
+  iconTex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
   local mask = row:CreateMaskTexture()
-  mask:SetTexture(CIRCLE, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+  mask:SetTexture(CircleFile(18), "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
   mask:SetAllPoints(iconTex)
   iconTex:AddMaskTexture(mask)
 
-  local text = Text(row, FONT.body, THEME.text)
-  text:SetPoint("LEFT", iconTex, "RIGHT", 10, 0)
+  local text = Text(row, FONT.label, THEME.text)
+  text:SetPoint("LEFT", iconTex, "RIGHT", 8, 0)
   text:SetText(name)
 
   local switch = CreateSwitch(row)
-  switch:SetPoint("RIGHT", -10, 0)
+  switch:SetPoint("RIGHT", -8, 0)
 
   local swatch = CreateFrame("Button", nil, row)
-  swatch:SetSize(22, 22)
-  swatch:SetPoint("RIGHT", switch, "LEFT", -14, 0)
-  local ring = Circle(swatch, 22, "ARTWORK")
+  swatch:SetSize(16, 16)
+  swatch:SetPoint("RIGHT", switch, "LEFT", -12, 0)
+  local ring = Circle(swatch, 16, "ARTWORK")
   ring:SetPoint("CENTER")
-  local dot = Circle(swatch, 16, "OVERLAY")
+  local dot = Circle(swatch, 12, "OVERLAY")
   dot:SetPoint("CENTER")
+
+  local function PaintRing()
+    local shade = swatch:IsMouseOver() and THEME.muted or THEME.border
+    ring:SetVertexColor(shade[1], shade[2], shade[3])
+  end
   swatch:SetScript("OnClick", function()
     OpenColorPicker(ns.db.colors[specIndex], function(r, g, b)
       ns.SetSpecColor(specIndex, r, g, b)
     end)
   end)
   swatch:SetScript("OnEnter", function()
-    ring:SetVertexColor(1, 1, 1, 0.6)
+    PaintRing()
     ShowTooltip(swatch, name .. " color", "Click to change the color used in " .. name .. ".")
   end)
   swatch:SetScript("OnLeave", function()
-    ring:SetVertexColor(1, 1, 1, 0.18)
+    PaintRing()
     GameTooltip:Hide()
   end)
 
@@ -463,7 +543,7 @@ function Card:Spec(specIndex)
   row.Refresh = function()
     local color = ns.db.colors[specIndex]
     dot:SetVertexColor(color.r, color.g, color.b)
-    ring:SetVertexColor(1, 1, 1, swatch:IsMouseOver() and 0.6 or 0.18)
+    PaintRing()
     local on = ns.db.specs[specIndex]
     switch:SetOn(on)
     iconTex:SetDesaturated(not on)
@@ -502,56 +582,48 @@ function ns.GetStatus()
   return "Paused · " .. specName .. " is off", 1, 0.75, 0.25
 end
 
+function ns.GetVersionLabel()
+  return ns.VERSION == "dev" and "Dev build" or ("v" .. ns.VERSION)
+end
+
 local function BuildHeader()
   local logo = CreateFrame("Frame", nil, content)
-  logo:SetSize(56, 56)
-  logo:SetPoint("TOPLEFT", 16, -16)
-  local glow = logo:CreateTexture(nil, "BACKGROUND")
-  glow:SetTexture(ns.MEDIA .. "glow")
-  glow:SetBlendMode("ADD")
-  glow:SetPoint("CENTER")
-  glow:SetSize(72, 72)
+  logo:SetSize(36, 36)
+  logo:SetPoint("TOPLEFT", MARGIN + 2, -MARGIN)
   local runes = logo:CreateTexture(nil, "ARTWORK")
   runes:SetTexture(ns.MEDIA .. "runes")
-  runes:SetBlendMode("ADD")
   runes:SetAllPoints()
+  Smooth(runes)
   local core = logo:CreateTexture(nil, "OVERLAY")
   core:SetTexture(ns.MEDIA .. "ring_core")
   core:SetBlendMode("ADD")
   core:SetAllPoints()
+  Smooth(core)
 
   local spin = runes:CreateAnimationGroup()
   spin:SetLooping("REPEAT")
   local rotation = spin:CreateAnimation("Rotation")
   rotation:SetDegrees(-360)
-  rotation:SetDuration(30)
+  rotation:SetDuration(40)
   logo.spin = spin
 
   local title = Text(content, FONT.title, THEME.text)
-  title:SetPoint("TOPLEFT", logo, "TOPRIGHT", 14, -4)
+  title:SetPoint("TOPLEFT", logo, "TOPRIGHT", 12, -1)
   title:SetText(ns.TITLE)
 
-  local status = CreateFrame("Frame", nil, content)
-  status:SetHeight(22)
-  status:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
-  NewRounded(status, 11, "BACKGROUND"):SetColor(1, 1, 1, 0.06)
-  local dot = Circle(status, 8, "ARTWORK")
-  dot:SetPoint("LEFT", 10, 0)
-  local statusText = Text(status, FONT.small, THEME.text)
-  statusText:SetPoint("LEFT", dot, "RIGHT", 7, 0)
+  local dot = Circle(content, 6, "ARTWORK")
+  dot:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 1, -7)
+  local status = Text(content, FONT.small, THEME.muted)
+  status:SetPoint("LEFT", dot, "RIGHT", 6, 0)
 
-  local version = Text(content, FONT.small, THEME.muted)
-  version:SetPoint("LEFT", status, "RIGHT", 10, 0)
-  version:SetText("v" .. ns.VERSION)
-
-  local preview = PillButton(content, "Preview", 116, true)
-  preview:SetPoint("TOPRIGHT", -16, -24)
+  local preview = CreateButton(content, "Preview", 84, true)
+  preview:SetPoint("TOPRIGHT", -MARGIN, -MARGIN - 6)
   preview:SetScript("OnClick", function()
     PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
     ns.SetPreview(not ns.IsPreviewing())
   end)
 
-  local reset = PillButton(content, "Reset", 84, false)
+  local reset = CreateButton(content, "Reset", 64, false)
   reset:SetPoint("RIGHT", preview, "LEFT", -8, 0)
   reset:SetScript("OnClick", function()
     PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
@@ -561,14 +633,12 @@ local function BuildHeader()
   Track({
     Refresh = function()
       local r, g, b = Accent()
-      glow:SetVertexColor(r, g, b, 0.7)
       runes:SetVertexColor(r, g, b)
-      core:SetVertexColor(r + (1 - r) * 0.55, g + (1 - g) * 0.55, b + (1 - b) * 0.55)
+      core:SetVertexColor(r + (1 - r) * 0.5, g + (1 - g) * 0.5, b + (1 - b) * 0.5)
       local label, sr, sg, sb = ns.GetStatus()
       dot:SetVertexColor(sr, sg, sb)
-      statusText:SetText(label)
-      status:SetWidth(statusText:GetStringWidth() + 36)
-      preview.text:SetText(ns.IsPreviewing() and "Stop preview" or "Preview")
+      status:SetText(label .. "   ·   " .. ns.GetVersionLabel())
+      preview.text:SetText(ns.IsPreviewing() and "Stop" or "Preview")
     end,
   })
   return logo
@@ -584,11 +654,11 @@ local function StackCards(cards, left)
       frame:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, -GAP)
       height = height + GAP
     elseif left then
-      frame:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -HEADER_HEIGHT)
+      frame:SetPoint("TOPLEFT", content, "TOPLEFT", MARGIN, -HEADER_HEIGHT)
       frame:SetPoint("TOPRIGHT", content, "TOP", -GAP / 2, -HEADER_HEIGHT)
     else
       frame:SetPoint("TOPLEFT", content, "TOP", GAP / 2, -HEADER_HEIGHT)
-      frame:SetPoint("TOPRIGHT", content, "TOPRIGHT", -16, -HEADER_HEIGHT)
+      frame:SetPoint("TOPRIGHT", content, "TOPRIGHT", -MARGIN, -HEADER_HEIGHT)
     end
     height = height + frame:GetHeight()
     previous = frame
@@ -605,10 +675,13 @@ local function BuildCards()
   end, function(on)
     ns.SetMinimapHidden(not on)
   end)
-  for specIndex = 1, 3 do
-    general:Spec(specIndex)
-  end
   general:Finish()
+
+  local specs = NewCard("Specializations")
+  for specIndex = 1, 3 do
+    specs:Spec(specIndex)
+  end
+  specs:Finish()
 
   local trigger = NewCard("Trigger")
   trigger:Slider("Appear at", "The aura fades in from this share of max runic power and reaches full strength at the cap.", "startPercent", Percent)
@@ -618,20 +691,23 @@ local function BuildCards()
   end)
   trigger:Finish()
 
-  local style = NewCard("Style")
-  style:Segmented("Look", "Aura: a burning rune circle around your character. Screen edge: a glow around the edges of the screen.", ns.STYLES, function()
-    return ns.db.style
-  end, function(key)
-    ns.Set("style", key)
+  local style = NewCard("Appearance")
+  style:Patterns("Pattern")
+  style:Toggle("Screen edge glow", "Also glow softly around the edges of the screen. Available with patterns drawn around the character.", function()
+    return ns.db.edgeGlow
+  end, function(on)
+    ns.Set("edgeGlow", on)
+  end, function()
+    return not ns.GetPattern(ns.db.pattern).screen
   end)
   style:Slider("Max opacity", "Opacity at full runic power.", "maxOpacity", Percent)
   style:Slider("Size", "Size of the aura around your character.", "scale", Percent)
   style:Slider("Vertical offset", "Move the aura up or down.", "offsetY", Pixels)
-  style:Setting("Motion", "Slowly turn the rune circle and let the ring flicker.", "motion")
-  style:Setting("Smooth fade", "Ease opacity changes instead of snapping. In combat, when runic power is hidden from addons, the aura always snaps.", "smooth")
+  style:Setting("Motion", "Slowly turn the patterns and let them breathe.", "motion")
+  style:Setting("Smooth fade", "Glide between opacity levels instead of jumping. If the game hides runic power from addons in combat, changes there are instant.", "smooth")
   style:Finish()
 
-  local leftHeight = StackCards({ general, trigger }, true)
+  local leftHeight = StackCards({ general, specs, trigger }, true)
   local rightHeight = StackCards({ style }, false)
   return math.max(leftHeight, rightHeight)
 end
@@ -659,13 +735,13 @@ local function BuildPanel()
 
   content = CreateFrame("Frame", nil, scroll)
   scroll:SetScrollChild(content)
-  content:SetWidth(math.max(560, panel:GetWidth() or 0))
+  content:SetWidth(math.max(520, panel:GetWidth() or 0))
   scroll:SetScript("OnSizeChanged", function(_, width)
-    content:SetWidth(math.max(560, width))
+    content:SetWidth(math.max(520, width))
   end)
 
   panel.logo = BuildHeader()
-  content:SetHeight(HEADER_HEIGHT + BuildCards() + 16)
+  content:SetHeight(HEADER_HEIGHT + BuildCards() + MARGIN)
 end
 
 local function RegisterSettingsCategory()

@@ -21,26 +21,41 @@ ns.START_ALPHA = 0.15
 
 ns.DB_VERSION = 1
 
-ns.STYLES = {
-  { key = "aura", name = "Aura" },
-  { key = "edge", name = "Screen edge" },
-  { key = "both", name = "Both" },
+-- Overlay patterns in picker order. `screen` patterns cover the whole
+-- screen; the rest are drawn around the character. Layers live in Display.
+ns.PATTERNS = {
+  { key = "runes", name = "Rune circle", icon = "runes" },
+  { key = "halo", name = "Halo", icon = "glow" },
+  { key = "arcs", name = "Arcs", icon = "arcs_inner" },
+  { key = "sigil", name = "Sigil", icon = "sigil" },
+  { key = "embers", name = "Embers", icon = "embers" },
+  { key = "edge", name = "Screen edge", icon = "edge", screen = true },
+  { key = "corners", name = "Corners", icon = "corners", screen = true },
 }
+
+function ns.GetPattern(key)
+  for _, pattern in ipairs(ns.PATTERNS) do
+    if pattern.key == key then
+      return pattern
+    end
+  end
+end
 
 ns.DEFAULTS = {
   enabled = true,
   specs = { [1] = true, [2] = true, [3] = true },
   colors = {
-    [1] = { r = 0.95, g = 0.12, b = 0.16 },
-    [2] = { r = 0.25, g = 0.66, b = 1.00 },
-    [3] = { r = 0.45, g = 0.95, b = 0.25 },
+    [1] = { r = 0.88, g = 0.25, b = 0.28 },
+    [2] = { r = 0.40, g = 0.68, b = 0.95 },
+    [3] = { r = 0.52, g = 0.85, b = 0.40 },
   },
   combatOnly = false,
   startPercent = 85,
   pulse = true,
   pulsePercent = 95,
-  style = "aura",
-  maxOpacity = 100,
+  pattern = "runes",
+  edgeGlow = false,
+  maxOpacity = 70,
   scale = 100,
   offsetY = -20,
   motion = true,
@@ -84,26 +99,23 @@ local function ClampSetting(key, value)
   return math.min(max, math.max(min, value))
 end
 
-local function IsStyle(key)
-  for _, style in ipairs(ns.STYLES) do
-    if style.key == key then
-      return true
-    end
-  end
-  return false
-end
-
 local function InitDB()
   if type(_G.DKNORP_DB) ~= "table" then
     _G.DKNORP_DB = {}
   end
   local db = _G.DKNORP_DB
+  -- Early 2.0 builds had a three-way "style" instead of patterns.
+  if db.style then
+    db.pattern = db.style == "edge" and "edge" or "runes"
+    db.edgeGlow = db.style == "both"
+    db.style = nil
+  end
   CopyDefaults(ns.DEFAULTS, db)
   for key in pairs(ns.LIMITS) do
     db[key] = ClampSetting(key, db[key])
   end
-  if not IsStyle(db.style) then
-    db.style = ns.DEFAULTS.style
+  if not ns.GetPattern(db.pattern) then
+    db.pattern = ns.DEFAULTS.pattern
   end
   db.dbVersion = ns.DB_VERSION
   ns.db = db
@@ -153,12 +165,14 @@ function ns.SetMinimapHidden(hidden)
   ns.Notify("minimap")
 end
 
--- Resets everything except where the minimap button sits.
+-- Resets everything except where the minimap button sits. The minimap
+-- table itself is kept because LibDBIcon holds a reference to it.
 function ns.ResetSettings()
-  local angle = ns.db.minimap.angle
+  local minimap = ns.db.minimap
   wipe(ns.db)
+  minimap.hide = false
+  ns.db.minimap = minimap
   CopyDefaults(ns.DEFAULTS, ns.db)
-  ns.db.minimap.angle = angle
   ns.db.dbVersion = ns.DB_VERSION
   ns.Notify("*")
 end

@@ -194,10 +194,101 @@ def vignette():
     save_alpha("edge", alpha)
 
 
-def circle():
+def corners():
+    """Glow pooled in the four screen corners."""
+    w, h = 512, 256
+    u = (np.arange(w) + 0.5) / w
+    v = (np.arange(h) + 0.5) / h
+    uu, vv = np.meshgrid(u, v)
+    dx = np.minimum(uu, 1 - uu) * 1.6
+    dy = np.minimum(vv, 1 - vv)
+    d = np.hypot(dx, dy)
+    a = (1 - smoothstep(0.0, 0.42, d)) ** 2
+    smoke = fbm(uu * 2 - 1, vv * 2 - 1, 5, 4, 71)
+    save_alpha("corners", a * (0.4 + 0.6 * smoke**1.2))
+
+
+def glow_lines(draw_fn, size=512, blur=0.006, sharp_weight=0.85, glow_weight=1.3):
+    """Draws with draw_fn(draw, n, polar) at 4x, then adds a soft glow."""
     ss = 4
-    _, _, r, _ = grid(64, ss)
-    save_alpha("circle", downsample((r <= 1.0).astype(np.float32), ss))
+    n = size * ss
+    img = Image.new("L", (n, n), 0)
+    draw = ImageDraw.Draw(img)
+    c = n / 2
+
+    def polar(radius, angle):
+        return c + radius * c * np.cos(angle), c - radius * c * np.sin(angle)
+
+    draw_fn(draw, n, polar)
+    sharp = np.asarray(img, dtype=np.float32) / 255
+    blurred = np.asarray(img.filter(ImageFilter.GaussianBlur(n * blur)), dtype=np.float32) / 255
+    return downsample(np.clip(sharp * sharp_weight + blurred * glow_weight, 0, 1), ss)
+
+
+def arc_mask(theta, count, span, start, taper):
+    """1 inside `count` arcs of `span` radians, tapering at the ends."""
+    period = 2 * np.pi / count
+    local = np.mod(theta - start, period)
+    edge = np.minimum(local, span - local)
+    return np.where(local <= span, smoothstep(0, taper, edge), 0.0)
+
+
+def arcs_inner():
+    ss = 2
+    _, _, r, theta = grid(512, ss)
+    band = np.exp(-(((r - 0.60) / 0.016) ** 2)) + 0.35 * np.exp(-(((r - 0.60) / 0.05) ** 2))
+    save_alpha("arcs_inner", downsample(band * arc_mask(theta, 3, np.radians(78), 0.3, np.radians(14)), ss))
+
+
+def arcs_outer():
+    ss = 2
+    _, _, r, theta = grid(512, ss)
+    line = np.exp(-(((r - 0.71) / 0.006) ** 2)) * arc_mask(theta, 4, np.radians(58), 1.0, np.radians(6))
+    ticks_angle = np.mod(theta, np.radians(6))
+    ticks = (np.minimum(ticks_angle, np.radians(6) - ticks_angle) < np.radians(0.5)) * ((r > 0.75) & (r < 0.78))
+    ticks = ticks * arc_mask(theta, 2, np.radians(100), 2.2, np.radians(20)) * 0.6
+    save_alpha("arcs_outer", downsample(line + ticks, ss))
+
+
+def sigil():
+    def draw_fn(draw, n, polar):
+        stroke = max(2, int(n * 0.004))
+        c = n / 2
+        for radius in (0.80, 0.30):
+            rr = radius * c
+            draw.ellipse([c - rr, c - rr, c + rr, c + rr], outline=255, width=stroke)
+        for offset in (np.pi / 2, -np.pi / 2):
+            pts = [polar(0.68, offset + k * 2 * np.pi / 3) for k in range(3)]
+            draw.line(pts + [pts[0]], fill=255, width=stroke)
+        for k in range(6):
+            x, y = polar(0.68, np.pi / 2 + k * np.pi / 3)
+            rr = 0.035 * c
+            draw.ellipse([x - rr, y - rr, x + rr, y + rr], outline=255, width=stroke)
+            x, y = polar(0.80, np.pi / 2 + k * np.pi / 3 + np.pi / 6)
+            rr = 0.012 * c
+            draw.ellipse([x - rr, y - rr, x + rr, y + rr], fill=255)
+    save_alpha("sigil", glow_lines(draw_fn))
+
+
+def embers():
+    rng = np.random.default_rng(42)
+
+    def draw_fn(draw, n, polar):
+        c = n / 2
+        for _ in range(170):
+            radius = rng.normal(0.62, 0.075)
+            angle = rng.uniform(0, 2 * np.pi)
+            size = rng.uniform(0.004, 0.013) * c
+            x, y = polar(radius, angle)
+            draw.ellipse([x - size, y - size, x + size, y + size], fill=int(rng.uniform(110, 255)))
+    save_alpha("embers", glow_lines(draw_fn, blur=0.008, sharp_weight=0.8, glow_weight=1.6))
+
+
+def circle(size, name):
+    """Antialiased disc. UI shapes pick the size closest to 2x their draw size."""
+    ss = 8
+    _, _, r, _ = grid(size, ss)
+    save_alpha(name, downsample((r <= 1.0).astype(np.float32), ss))
 
 
 def logo():
@@ -229,5 +320,11 @@ if __name__ == "__main__":
     glow()
     save_alpha("runes", runes())
     vignette()
-    circle()
+    corners()
+    arcs_inner()
+    arcs_outer()
+    sigil()
+    embers()
+    circle(64, "circle")
+    circle(32, "circle32")
     logo()

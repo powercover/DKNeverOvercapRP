@@ -1,21 +1,56 @@
 local addonName, ns = ...
 
 -- The overlay is fully event driven. Nothing runs per frame except a short
--- fade OnUpdate that removes itself once the target opacity is reached, and
+-- eased fade that removes itself once the target opacity is reached, and
 -- the motion/pulse animation groups, which only play while the aura is shown.
 
 local POWER_TYPE = ns.POWER_TYPE
-local FADE_IN_SPEED = 5
-local FADE_OUT_SPEED = 3.5
+local FADE_IN_TIME = 0.5
+local FADE_OUT_TIME = 0.8
 local SNAP = 0.004
 local EPSILON = 0.0001
 -- Aura diameter as a share of the screen height at 100% size.
 local AURA_SIZE = 0.55
 
-local root, anchor, pulseGate, pulseAura, pulseEdge
-local aura = {}
-local edge, edgePulse
-local motionAnims = {}
+-- Layers per pattern. size: relative to the aura; alpha: layer strength;
+-- light: tinted toward white; spin: seconds per turn (negative = reverse);
+-- flicker: gentle breathing; screen: stretched over the whole screen.
+local LAYERS = {
+  runes = {
+    { file = "glow", size = 1.25, alpha = 0.30, layer = "BACKGROUND" },
+    { file = "ring", alpha = 0.50, spin = 120 },
+    { file = "runes", alpha = 0.40, spin = -60, sublevel = 1 },
+    { file = "ring_core", alpha = 0.45, light = true, flicker = true, layer = "OVERLAY" },
+  },
+  halo = {
+    { file = "glow", size = 1.3, alpha = 0.45, layer = "BACKGROUND" },
+    { file = "ring_core", alpha = 0.40, light = true, flicker = true, layer = "OVERLAY" },
+  },
+  arcs = {
+    { file = "glow", size = 1.25, alpha = 0.25, layer = "BACKGROUND" },
+    { file = "arcs_inner", alpha = 0.60, spin = 45 },
+    { file = "arcs_outer", alpha = 0.45, light = true, spin = -80, sublevel = 1 },
+  },
+  sigil = {
+    { file = "glow", size = 1.25, alpha = 0.25, layer = "BACKGROUND" },
+    { file = "sigil", alpha = 0.50, spin = -150 },
+  },
+  embers = {
+    { file = "glow", size = 1.25, alpha = 0.25, layer = "BACKGROUND" },
+    { file = "embers", alpha = 0.60, spin = 90 },
+    { file = "embers", size = 0.8, alpha = 0.30, light = true, spin = -60, sublevel = 1 },
+  },
+  edge = {
+    { file = "edge", alpha = 0.55, screen = true },
+  },
+  corners = {
+    { file = "corners", alpha = 0.65, screen = true },
+  },
+}
+
+local root, anchor, pulseGate, pulseAura, pulseAuraTex, pulseScreen, pulseScreenTex
+local layerSets = {}
+local active = {}
 local pulseAnims = {}
 local events = CreateFrame("Frame")
 
@@ -27,6 +62,9 @@ local state = {
   pulsing = false,
   alpha = 0,
   target = 0,
+  from = 0,
+  elapsed = 0,
+  duration = 0,
 }
 
 local intensityCurve, pulseCurve
@@ -35,81 +73,120 @@ local intensityCurve, pulseCurve
 -- Frame construction
 ---------------------------------------------------------------------------
 
-local function NewTexture(parent, file, layer, sublevel, alpha)
-  local tex = parent:CreateTexture(nil, layer, nil, sublevel)
+local function NewTexture(parent, file, layer, sublevel)
+  local tex = parent:CreateTexture(nil, layer or "ARTWORK", nil, sublevel)
   tex:SetTexture(ns.MEDIA .. file)
   tex:SetBlendMode("ADD")
-  tex:SetAlpha(alpha or 1)
   return tex
 end
 
-local function Spin(tex, seconds, degrees)
+local function AddSpin(tex, seconds)
   local group = tex:CreateAnimationGroup()
   group:SetLooping("REPEAT")
   local rotation = group:CreateAnimation("Rotation")
-  rotation:SetDegrees(degrees)
-  rotation:SetDuration(seconds)
-  motionAnims[#motionAnims + 1] = group
+  rotation:SetDegrees(seconds > 0 and 360 or -360)
+  rotation:SetDuration(math.abs(seconds))
+  return group
 end
 
-local function Flicker(tex, from, to, seconds)
+local function AddFlicker(tex, alpha)
   local group = tex:CreateAnimationGroup()
   group:SetLooping("BOUNCE")
   local fade = group:CreateAnimation("Alpha")
-  fade:SetFromAlpha(from)
-  fade:SetToAlpha(to)
-  fade:SetDuration(seconds)
+  fade:SetFromAlpha(alpha * 0.75)
+  fade:SetToAlpha(alpha)
+  fade:SetDuration(2.4)
   fade:SetSmoothing("IN_OUT")
-  motionAnims[#motionAnims + 1] = group
+  return group
 end
 
-local function PulseGroup(frame, scaleTo)
+-- A slow breath rather than a blink.
+local function AddPulse(frame, scaleTo)
   local group = frame:CreateAnimationGroup()
   group:SetLooping("BOUNCE")
   local fade = group:CreateAnimation("Alpha")
   fade:SetFromAlpha(0)
   fade:SetToAlpha(1)
-  fade:SetDuration(0.55)
+  fade:SetDuration(1.2)
   fade:SetSmoothing("IN_OUT")
   if scaleTo then
     local grow = group:CreateAnimation("Scale")
     grow:SetScaleFrom(1, 1)
     grow:SetScaleTo(scaleTo, scaleTo)
-    grow:SetDuration(0.55)
+    grow:SetDuration(1.2)
     grow:SetSmoothing("IN_OUT")
   end
   pulseAnims[#pulseAnims + 1] = group
 end
 
-local function ShowsAura()
-  return ns.db.style ~= "edge"
-end
-
-local function ShowsEdge()
-  return ns.db.style ~= "aura"
-end
-
-local function StartAnimations()
-  for _, group in ipairs(motionAnims) do
-    if ns.db.motion then
-      group:Play()
+-- Pattern textures are created the first time a pattern is used.
+local function GetLayerSet(key)
+  local set = layerSets[key]
+  if set then
+    return set
+  end
+  set = {}
+  for i, def in ipairs(LAYERS[key]) do
+    local tex = NewTexture(root, def.file, def.layer or (def.screen and "BACKGROUND") or "ARTWORK", def.sublevel)
+    tex:SetAlpha(def.alpha)
+    tex.def = def
+    if def.screen then
+      tex:SetAllPoints(root)
     else
-      group:Stop()
+      tex:SetPoint("CENTER", anchor)
     end
-  end
-  if state.pulsing then
-    for _, group in ipairs(pulseAnims) do
-      group:Play()
+    if def.spin then
+      tex.motion = AddSpin(tex, def.spin)
+    elseif def.flicker then
+      tex.motion = AddFlicker(tex, def.alpha)
     end
+    tex:Hide()
+    set[i] = tex
   end
+  layerSets[key] = set
+  return set
 end
 
 local function StopAnimations()
-  for _, group in ipairs(motionAnims) do
-    group:Stop()
+  for _, set in pairs(layerSets) do
+    for _, tex in ipairs(set) do
+      if tex.motion then
+        tex.motion:Stop()
+      end
+    end
   end
   for _, group in ipairs(pulseAnims) do
     group:Stop()
+  end
+end
+
+local function Run(group, on)
+  if not on then
+    group:Stop()
+  elseif not group:IsPlaying() then
+    group:Play()
+  end
+end
+
+-- Leaves running animations alone so settings changes don't make them jump.
+local function StartAnimations()
+  local wanted = {}
+  if ns.db.motion then
+    for _, tex in ipairs(active) do
+      if tex.motion then
+        wanted[tex.motion] = true
+      end
+    end
+  end
+  for _, set in pairs(layerSets) do
+    for _, tex in ipairs(set) do
+      if tex.motion then
+        Run(tex.motion, wanted[tex.motion])
+      end
+    end
+  end
+  for _, group in ipairs(pulseAnims) do
+    Run(group, state.pulsing)
   end
 end
 
@@ -127,17 +204,6 @@ local function EnsureUI()
 
   anchor = CreateFrame("Frame", nil, root)
 
-  aura.glow = NewTexture(root, "glow", "BACKGROUND", 0, 0.55)
-  aura.ring = NewTexture(root, "ring", "ARTWORK", 0, 0.9)
-  aura.runes = NewTexture(root, "runes", "ARTWORK", 1, 0.75)
-  aura.core = NewTexture(root, "ring_core", "OVERLAY", 0, 0.85)
-  edge = NewTexture(root, "edge", "BACKGROUND", 1, 0.85)
-  edge:SetAllPoints(root)
-
-  Spin(aura.runes, 60, -360)
-  Spin(aura.ring, 120, 360)
-  Flicker(aura.core, 0.55, 0.95, 1.4)
-
   -- The gate carries the "near cap" opacity (0 or 1, possibly secret); the
   -- frames inside it carry the looping pulse animations.
   pulseGate = CreateFrame("Frame", nil, root)
@@ -147,18 +213,18 @@ local function EnsureUI()
   pulseAura = CreateFrame("Frame", nil, pulseGate)
   pulseAura:SetPoint("CENTER", anchor)
   pulseAura:SetAlpha(0)
-  aura.pulseRing = NewTexture(pulseAura, "ring", "ARTWORK")
-  aura.pulseRing:SetAllPoints(pulseAura)
-  aura.pulseGlow = NewTexture(pulseAura, "glow", "BACKGROUND", 0, 0.6)
-  aura.pulseGlow:SetPoint("CENTER")
-  PulseGroup(pulseAura, 1.08)
+  pulseAuraTex = NewTexture(pulseAura, "glow", "BACKGROUND")
+  pulseAuraTex:SetAlpha(0.5)
+  pulseAuraTex:SetAllPoints(pulseAura)
+  AddPulse(pulseAura, 1.04)
 
-  pulseEdge = CreateFrame("Frame", nil, pulseGate)
-  pulseEdge:SetAllPoints(root)
-  pulseEdge:SetAlpha(0)
-  edgePulse = NewTexture(pulseEdge, "edge", "BACKGROUND", 1, 0.7)
-  edgePulse:SetAllPoints(pulseEdge)
-  PulseGroup(pulseEdge)
+  pulseScreen = CreateFrame("Frame", nil, pulseGate)
+  pulseScreen:SetAllPoints(root)
+  pulseScreen:SetAlpha(0)
+  pulseScreenTex = NewTexture(pulseScreen, "edge", "BACKGROUND")
+  pulseScreenTex:SetAlpha(0.5)
+  pulseScreenTex:SetAllPoints(pulseScreen)
+  AddPulse(pulseScreen)
 
   root:SetScript("OnShow", StartAnimations)
   root:SetScript("OnHide", StopAnimations)
@@ -185,45 +251,64 @@ function ns.LayoutOverlay()
   anchor:ClearAllPoints()
   anchor:SetPoint("CENTER", root, "CENTER", 0, db.offsetY)
   anchor:SetSize(size, size)
-
-  for _, tex in ipairs({ aura.ring, aura.runes, aura.core }) do
-    tex:ClearAllPoints()
-    tex:SetPoint("CENTER", anchor)
-    tex:SetSize(size, size)
+  for _, set in pairs(layerSets) do
+    for _, tex in ipairs(set) do
+      if not tex.def.screen then
+        local scale = tex.def.size or 1
+        tex:SetSize(size * scale, size * scale)
+      end
+    end
   end
-  aura.glow:ClearAllPoints()
-  aura.glow:SetPoint("CENTER", anchor)
-  aura.glow:SetSize(size * 1.25, size * 1.25)
+  pulseAura:SetSize(size * 1.3, size * 1.3)
+end
 
-  pulseAura:SetSize(size, size)
-  aura.pulseGlow:SetSize(size * 1.25, size * 1.25)
+local function ActivePatterns()
+  local keys = { ns.db.pattern }
+  if ns.db.edgeGlow and not ns.GetPattern(ns.db.pattern).screen then
+    keys[2] = "edge"
+  end
+  return keys
 end
 
 local function ApplyAppearance()
   local color = ns.GetActiveColor()
   local r, g, b = color.r, color.g, color.b
-  -- The core line burns closer to white.
-  local lr, lg, lb = r + (1 - r) * 0.55, g + (1 - g) * 0.55, b + (1 - b) * 0.55
+  local lr, lg, lb = r + (1 - r) * 0.5, g + (1 - g) * 0.5, b + (1 - b) * 0.5
 
-  for key, tex in pairs(aura) do
-    if key == "core" then
-      tex:SetVertexColor(lr, lg, lb)
-    else
-      tex:SetVertexColor(r, g, b)
+  wipe(active)
+  local wanted = {}
+  local hasAura, screenFile = false, nil
+  for _, key in ipairs(ActivePatterns()) do
+    for _, tex in ipairs(GetLayerSet(key)) do
+      if tex.def.light then
+        tex:SetVertexColor(lr, lg, lb)
+      else
+        tex:SetVertexColor(r, g, b)
+      end
+      wanted[tex] = true
+      active[#active + 1] = tex
+      if tex.def.screen then
+        screenFile = tex.def.file
+      else
+        hasAura = true
+      end
     end
   end
-  edge:SetVertexColor(r, g, b)
-  edgePulse:SetVertexColor(r, g, b)
 
-  local showAura, showEdge = ShowsAura(), ShowsEdge()
-  for key, tex in pairs(aura) do
-    if key ~= "pulseRing" and key ~= "pulseGlow" then
-      tex:SetShown(showAura)
+  for _, set in pairs(layerSets) do
+    for _, tex in ipairs(set) do
+      tex:SetShown(wanted[tex] == true)
     end
   end
-  pulseAura:SetShown(showAura)
-  edge:SetShown(showEdge)
-  pulseEdge:SetShown(showEdge)
+
+  pulseAura:SetShown(hasAura)
+  pulseAuraTex:SetVertexColor(lr, lg, lb)
+  pulseScreen:SetShown(screenFile ~= nil)
+  if screenFile then
+    pulseScreenTex:SetTexture(ns.MEDIA .. screenFile)
+  end
+  pulseScreenTex:SetVertexColor(r, g, b)
+  ns.LayoutOverlay()
 end
 
 -- Curves let the client map secret power values to opacity for us.
@@ -259,9 +344,11 @@ local function BuildCurves()
 end
 
 local function RefreshAppearance()
-  ns.LayoutOverlay()
   ApplyAppearance()
   BuildCurves()
+  if root:IsShown() then
+    StartAnimations()
+  end
 end
 
 ---------------------------------------------------------------------------
@@ -283,7 +370,7 @@ local function SetPulsing(pulsing)
   pulseGate:SetAlpha(pulsing and 1 or 0)
   for _, group in ipairs(pulseAnims) do
     if pulsing and root:IsShown() then
-      group:Play()
+      Run(group, true)
     elseif not pulsing then
       group:Stop()
     end
@@ -302,10 +389,13 @@ local function ApplyAlpha()
   end
 end
 
+-- Eased (cosine in-out) tween from state.from to state.target.
 local function OnFadeUpdate(self, elapsed)
-  local speed = state.target > state.alpha and FADE_IN_SPEED or FADE_OUT_SPEED
-  state.alpha = state.alpha + (state.target - state.alpha) * (1 - math.exp(-elapsed * speed))
-  if math.abs(state.alpha - state.target) < SNAP then
+  state.elapsed = state.elapsed + elapsed
+  local progress = math.min(1, state.elapsed / state.duration)
+  local eased = 0.5 - 0.5 * math.cos(math.pi * progress)
+  state.alpha = state.from + (state.target - state.from) * eased
+  if progress >= 1 then
     state.alpha = state.target
     self:SetScript("OnUpdate", nil)
   end
@@ -313,18 +403,25 @@ local function OnFadeUpdate(self, elapsed)
 end
 
 local function SetTarget(target, pulsing)
-  state.target = target
   if state.secret or not ns.db.smooth then
     -- Coming out of secret mode the shown opacity is unknown; snap.
     state.secret = false
     state.alpha = target
   end
+  local tweening = root:GetScript("OnUpdate") ~= nil
   if math.abs(state.alpha - target) < SNAP then
     state.alpha = target
     root:SetScript("OnUpdate", nil)
-  else
+  elseif not tweening or target ~= state.target then
+    -- Bigger jumps take a little longer, small nudges stay quick.
+    local distance = math.abs(target - state.alpha)
+    local base = target > state.alpha and FADE_IN_TIME or FADE_OUT_TIME
+    state.from = state.alpha
+    state.elapsed = 0
+    state.duration = base * (0.6 + 0.4 * math.min(1, distance / 0.5))
     root:SetScript("OnUpdate", OnFadeUpdate)
   end
+  state.target = target
   ApplyAlpha()
   SetPulsing(pulsing and target > 0)
 end
@@ -360,7 +457,7 @@ local function ApplySecret()
     state.pulsing = true
     pulseGate:SetAlpha(gate)
     for _, group in ipairs(pulseAnims) do
-      group:Play()
+      Run(group, true)
     end
   else
     SetPulsing(false)
@@ -372,10 +469,7 @@ local function Evaluate()
     return
   end
   if state.preview then
-    root:SetScript("OnUpdate", nil)
-    state.alpha, state.target, state.secret = ns.db.maxOpacity / 100, ns.db.maxOpacity / 100, false
-    ApplyAlpha()
-    SetPulsing(ns.db.pulse)
+    SetTarget(ns.db.maxOpacity / 100, ns.db.pulse)
     return
   end
   if not state.active or (ns.db.combatOnly and not state.inCombat) then
@@ -472,9 +566,6 @@ ns.OnChange(function(key)
     return
   end
   RefreshAppearance()
-  if root:IsShown() then
-    StartAnimations()
-  end
   UpdateEngine()
   Evaluate()
 end)
