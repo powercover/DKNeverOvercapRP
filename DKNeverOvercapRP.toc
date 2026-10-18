@@ -1,9 +1,11 @@
-## Interface: 120100, 120105
+## Interface: 120100, 120105, 120107
 ## Title: DK Never Overcap RP
 ## Notes: A soft glow around your Death Knight as runic power nears the cap. Every spec, its own color.
 ## Author: powercover
 ## Version: 2.0.0
 ## X-License: All Rights Reserved
+## X-Curse-Project-ID: 1695876
+## X-Wago-ID: EGPa75N1
 ## SavedVariables: DKNORP_DB
 ## AllowLoadGameType: mainline
 ## Category: Combat
