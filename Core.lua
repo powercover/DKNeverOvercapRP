@@ -1,22 +1,53 @@
 local addonName, ns = ...
 
 ns.ADDON_NAME = addonName
-ns.VERSION = C_AddOns.GetAddOnMetadata(addonName, "Version") or "1.0.0"
+ns.TITLE = "BDK Never Overcap RP"
+ns.ICON = "Interface\\Icons\\spell_deathknight_deathstrike"
+ns.ACCENT = { r = 0.77, g = 0.12, b = 0.23 }
+ns.ACCENT_HEX = "ffc41e3a"
 
-ns.BLOOD_SPEC_INDEX = 1
+do
+  local version = C_AddOns.GetAddOnMetadata(addonName, "Version")
+  -- Unpackaged checkouts still carry the packager token.
+  if not version or version:find("@", 1, true) then
+    version = "dev"
+  end
+  ns.VERSION = version
+end
+
+ns.DK_CLASS_ID = 6
 ns.POWER_TYPE = Enum.PowerType.RunicPower
+ns.POWER_TOKEN = "RUNIC_POWER"
+-- Opacity the aura has at the moment it first appears (scaled by max opacity).
+ns.START_ALPHA = 0.15
 
-ns.START_ALPHA = 0.1
+ns.DB_VERSION = 2
 
 ns.DEFAULTS = {
   enabled = true,
-  overlayAtPercent = 85,
-  textureKey = "mixed",
-  minimapAngle = 210,
-  warnAt = 80,
-  criticalAt = 90,
-  powerMaxFallback = 125,
-  settingsRev = 1,
+  specs = { [1] = true, [2] = false, [3] = false },
+  combatOnly = false,
+  startPercent = 85,
+  pulse = true,
+  pulsePercent = 95,
+  texture = "mixed",
+  useTint = false,
+  tint = { r = 1, g = 0.12, b = 0.08 },
+  maxOpacity = 100,
+  scale = 100,
+  offsetY = -20,
+  spin = true,
+  smooth = true,
+  minimap = { hide = false, angle = 210 },
+}
+
+-- min, max, step for every numeric setting.
+ns.LIMITS = {
+  startPercent = { 0, 100, 1 },
+  pulsePercent = { 50, 100, 1 },
+  maxOpacity = { 10, 100, 5 },
+  scale = { 50, 200, 5 },
+  offsetY = { -400, 400, 5 },
 }
 
 ns.TEXTURE_PRESETS = {
@@ -31,197 +62,191 @@ ns.TEXTURE_PRESETS = {
   { key = "killingmachine", name = "Killing Machine", side = 458740, corner = 458740 },
 }
 
+local presetsByKey = {}
+for _, preset in ipairs(ns.TEXTURE_PRESETS) do
+  presetsByKey[preset.key] = preset
+end
+
 function ns.GetTexturePreset(key)
-  key = key or ns.EnsureDB().textureKey
-  for _, preset in ipairs(ns.TEXTURE_PRESETS) do
-    if preset.key == key then
-      return preset
+  return presetsByKey[key or ns.db.texture] or ns.TEXTURE_PRESETS[1]
+end
+
+---------------------------------------------------------------------------
+-- Saved variables
+---------------------------------------------------------------------------
+
+local function CopyDefaults(src, dst)
+  for key, value in pairs(src) do
+    if type(value) == "table" then
+      if type(dst[key]) ~= "table" then
+        dst[key] = {}
+      end
+      CopyDefaults(value, dst[key])
+    elseif dst[key] == nil or type(dst[key]) ~= type(value) then
+      dst[key] = value
     end
   end
-  return ns.TEXTURE_PRESETS[1]
 end
 
-local overlayCurveCache = {}
-
-function ns.IsBloodDeathKnight()
-  local _, class = UnitClass("player")
-  if class ~= "DEATHKNIGHT" then
-    return false
+local function Migrate(db)
+  local version = db.dbVersion or (db.settingsRev and 1) or ns.DB_VERSION
+  if version < 2 then
+    -- v1 used flat keys; carry over what the user had set.
+    if type(db.overlayAtPercent) == "number" then
+      db.startPercent = db.overlayAtPercent
+    end
+    if type(db.textureKey) == "string" then
+      db.texture = db.textureKey
+    end
+    if type(db.minimapAngle) == "number" then
+      db.minimap = { hide = false, angle = db.minimapAngle }
+    end
+    for _, key in ipairs({ "overlayAtPercent", "textureKey", "minimapAngle", "warnAt", "criticalAt", "powerMaxFallback", "settingsRev" }) do
+      db[key] = nil
+    end
   end
-  local spec = GetSpecialization and GetSpecialization()
-  return spec == ns.BLOOD_SPEC_INDEX
+  db.dbVersion = ns.DB_VERSION
 end
 
-function ns.CanAccessPowerNumber(value)
+local function ClampSetting(key, value)
+  local limit = ns.LIMITS[key]
+  if not limit or type(value) ~= "number" then
+    return value
+  end
+  local min, max, step = limit[1], limit[2], limit[3]
+  value = math.floor((value - min) / step + 0.5) * step + min
+  return math.min(max, math.max(min, value))
+end
+
+local function InitDB()
+  if type(_G.BDKNORP_DB) ~= "table" then
+    _G.BDKNORP_DB = {}
+  end
+  local db = _G.BDKNORP_DB
+  Migrate(db)
+  CopyDefaults(ns.DEFAULTS, db)
+  for key in pairs(ns.LIMITS) do
+    db[key] = ClampSetting(key, db[key])
+  end
+  if not presetsByKey[db.texture] then
+    db.texture = ns.DEFAULTS.texture
+  end
+  ns.db = db
+end
+
+---------------------------------------------------------------------------
+-- Change notification
+---------------------------------------------------------------------------
+
+local listeners = {}
+
+-- fn(key) is called after a setting changes. key is "*" after a reset and
+-- "state" when the overlay engine turns on or off.
+function ns.OnChange(fn)
+  listeners[#listeners + 1] = fn
+end
+
+function ns.Notify(key)
+  for i = 1, #listeners do
+    listeners[i](key)
+  end
+end
+
+function ns.Set(key, value)
+  value = ClampSetting(key, value)
+  if ns.db[key] == value then
+    return value
+  end
+  ns.db[key] = value
+  ns.Notify(key)
+  return value
+end
+
+function ns.SetSpecTracked(specIndex, tracked)
+  ns.db.specs[specIndex] = tracked and true or false
+  ns.Notify("specs")
+end
+
+function ns.SetTint(r, g, b)
+  local tint = ns.db.tint
+  tint.r, tint.g, tint.b = r, g, b
+  ns.Notify("tint")
+end
+
+function ns.SetMinimapHidden(hidden)
+  ns.db.minimap.hide = hidden and true or false
+  ns.Notify("minimap")
+end
+
+function ns.ResetSettings()
+  local angle = ns.db.minimap.angle
+  wipe(ns.db)
+  CopyDefaults(ns.DEFAULTS, ns.db)
+  ns.db.minimap.angle = angle
+  ns.db.dbVersion = ns.DB_VERSION
+  ns.Notify("*")
+end
+
+---------------------------------------------------------------------------
+-- Player helpers
+---------------------------------------------------------------------------
+
+function ns.GetSpecInfo(specIndex)
+  local _, name, _, icon = GetSpecializationInfoForClassID(ns.DK_CLASS_ID, specIndex)
+  return name or ("Spec " .. specIndex), icon
+end
+
+function ns.GetSpecIndex()
+  return GetSpecialization and GetSpecialization() or nil
+end
+
+-- In Midnight, combat values can be secret: they can be passed to widgets
+-- but not compared or used in arithmetic by addon code.
+function ns.IsReadable(value)
   if value == nil then
     return false
   end
-  if type(canaccessvalue) == "function" then
+  if canaccessvalue then
     local ok, accessible = pcall(canaccessvalue, value)
     return ok and accessible == true
   end
-  if type(issecretvalue) == "function" then
+  if issecretvalue then
     local ok, secret = pcall(issecretvalue, value)
     return ok and secret == false
   end
   return true
 end
 
-function ns.GetRunicPower()
-  if not UnitExists("player") then
-    return 0, ns.EnsureDB().powerMaxFallback
-  end
-  local current = UnitPower("player", ns.POWER_TYPE)
-  local max = UnitPowerMax("player", ns.POWER_TYPE)
-  return current, max or ns.EnsureDB().powerMaxFallback
-end
-
-function ns.GetPowerMaxFallback(max)
-  if ns.CanAccessPowerNumber(max) and max > 0 then
-    return max
-  end
-  return ns.EnsureDB().powerMaxFallback
-end
-
-function ns.GetOverlayStartFraction(db)
-  db = db or ns.EnsureDB()
-  local percent = ns.DEFAULTS.overlayAtPercent
-  if db.overlayAtPercent ~= nil then
-    percent = db.overlayAtPercent
-  end
-  return math.min(0.99, math.max(0, percent / 100))
-end
-
-function ns.SetOverlayAtPercent(percent)
-  local db = ns.EnsureDB()
-  local value = math.min(100, math.max(0, math.floor(percent + 0.5)))
-  db.overlayAtPercent = value
-  if ns.RefreshDisplay then
-    ns.RefreshDisplay()
-  end
-  return db.overlayAtPercent
-end
-
-function ns.SetAddonEnabled(enabled)
-  local db = ns.EnsureDB()
-  db.enabled = enabled and true or false
-  if ns.RefreshDisplay then
-    ns.RefreshDisplay()
-  end
-  if ns.RefreshMinimapButton then
-    ns.RefreshMinimapButton()
-  end
-  return db.enabled
-end
-
-function ns.SetTextureKey(key)
-  local preset = ns.GetTexturePreset(key)
-  ns.EnsureDB().textureKey = preset.key
-  if ns.ApplyOverlayTextures then
-    ns.ApplyOverlayTextures()
-  end
-  if ns.RefreshOptions then
-    ns.RefreshOptions()
-  end
-end
-
-function ns.GetOverlayCurve(db, maxAlpha)
-  if not C_CurveUtil or not C_CurveUtil.CreateColorCurve then
-    return nil
-  end
-
-  db = db or ns.EnsureDB()
-  maxAlpha = maxAlpha or 1
-  local startFrac = ns.GetOverlayStartFraction(db)
-  local cacheKey = string.format("%.4f:%.3f", startFrac, maxAlpha)
-  local cached = overlayCurveCache[cacheKey]
-  if cached then
-    return cached
-  end
-
-  local epsilon = 0.0001
-  local span = math.max(0.01, 1 - startFrac)
-  local startAlpha = (ns.START_ALPHA or 0.1) * maxAlpha
-  local curve = C_CurveUtil.CreateColorCurve()
-  curve:AddPoint(0.0, CreateColor(0.72, 0.0, 0.0, 0))
-  curve:AddPoint(math.max(0.0, startFrac - epsilon), CreateColor(0.72, 0.0, 0.0, 0))
-  curve:AddPoint(startFrac, CreateColor(0.72, 0.0, 0.0, startAlpha))
-  curve:AddPoint(startFrac + span * 0.50, CreateColor(0.80, 0.01, 0.0, startAlpha + (maxAlpha - startAlpha) * 0.50))
-  curve:AddPoint(1.0, CreateColor(0.88, 0.02, 0.0, maxAlpha))
-
-  overlayCurveCache[cacheKey] = curve
-  return curve
-end
-
-function ns.GetOverlayColor(db, maxAlpha)
-  local curve = ns.GetOverlayCurve(db, maxAlpha)
-  if curve and UnitPowerPercent then
-    local ok, color = pcall(UnitPowerPercent, "player", ns.POWER_TYPE, false, curve)
-    if ok and color and color.GetRGBA then
-      return color
-    end
-  end
-  return CreateColor(0.72, 0.0, 0.0, 0)
-end
-
-function ns.GetAccessibleOverlayIntensity(current, max, db)
-  if not ns.CanAccessPowerNumber(current) then
-    return nil
-  end
-
-  db = db or ns.EnsureDB()
-  local maxDisplay = ns.GetPowerMaxFallback(max)
-  if not ns.CanAccessPowerNumber(maxDisplay) or maxDisplay <= 0 then
-    return nil
-  end
-
-  local startFrac = ns.GetOverlayStartFraction(db)
-  local frac = current / maxDisplay
-  if not ns.CanAccessPowerNumber(frac) then
-    return nil
-  end
-  if frac < startFrac then
-    return 0
-  end
-  local t = (frac - startFrac) / math.max(0.01, 1 - startFrac)
-  t = math.min(1, math.max(0, t))
-  local startAlpha = ns.START_ALPHA or 0.1
-  return startAlpha + (1 - startAlpha) * t
-end
-
-function ns.EnsureDB()
-  if type(_G.BDKNORP_DB) ~= "table" then
-    _G.BDKNORP_DB = {}
-  end
-  local db = _G.BDKNORP_DB
-  for key, value in pairs(ns.DEFAULTS) do
-    if db[key] == nil then
-      db[key] = value
-    end
-  end
-  if (db.settingsRev or 0) < 1 then
-    if db.overlayAtPercent == 90 then
-      db.overlayAtPercent = ns.DEFAULTS.overlayAtPercent
-    end
-    db.settingsRev = 1
-  end
-  ns.db = db
-  return db
-end
-
 function ns.Print(msg)
-  local text = "|cffC41E3A" .. addonName .. "|r: " .. tostring(msg)
-  if DEFAULT_CHAT_FRAME then
-    DEFAULT_CHAT_FRAME:AddMessage(text)
-  else
-    print(text)
-  end
+  DEFAULT_CHAT_FRAME:AddMessage("|c" .. ns.ACCENT_HEX .. ns.TITLE .. "|r: " .. tostring(msg))
+end
+
+---------------------------------------------------------------------------
+-- Bootstrap
+---------------------------------------------------------------------------
+
+local loginHandlers = {}
+
+-- Runs fn at PLAYER_LOGIN, in registration (file load) order.
+function ns.OnLogin(fn)
+  loginHandlers[#loginHandlers + 1] = fn
 end
 
 local loader = CreateFrame("Frame")
 loader:RegisterEvent("ADDON_LOADED")
-loader:SetScript("OnEvent", function(_, _, name)
-  if name == addonName then
-    ns.EnsureDB()
+loader:RegisterEvent("PLAYER_LOGIN")
+loader:SetScript("OnEvent", function(self, event, name)
+  if event == "ADDON_LOADED" then
+    if name == addonName then
+      InitDB()
+      self:UnregisterEvent("ADDON_LOADED")
+    end
+    return
+  end
+  self:UnregisterEvent("PLAYER_LOGIN")
+  local _, class = UnitClass("player")
+  ns.isDeathKnight = class == "DEATHKNIGHT"
+  for i = 1, #loginHandlers do
+    loginHandlers[i]()
   end
 end)

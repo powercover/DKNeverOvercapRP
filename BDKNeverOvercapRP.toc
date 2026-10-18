@@ -1,13 +1,16 @@
 ## Interface: 120105, 120100
-## Interface-Retail: 120105, 120100
-## Title: BDK Never Overcap RP
-## Notes: Blood Death Knight runic power cap overlay
+## Title: |cffc41e3aBDK|r Never Overcap RP
+## Notes: Blood aura around your character as runic power nears the cap.
 ## Author: powercover
-## Version: 1.0.0
-## SavedVariables: BDKNORP_DB
+## Version: @project-version@
+## Category: Combat
 ## IconTexture: Interface\Icons\spell_deathknight_deathstrike
+## SavedVariables: BDKNORP_DB
+## AddonCompartmentFunc: BDKNeverOvercapRP_OnCompartmentClick
+## AddonCompartmentFuncOnEnter: BDKNeverOvercapRP_OnCompartmentEnter
+## AddonCompartmentFuncOnLeave: BDKNeverOvercapRP_OnCompartmentLeave
 
 Core.lua
 Display.lua
-Config.lua
 Options.lua
+Commands.lua

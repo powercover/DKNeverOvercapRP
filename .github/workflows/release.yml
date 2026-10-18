@@ -1,0 +1,59 @@
+name: Release
+
+# Two ways to cut a release:
+#   1. Push a tag:   git tag v2.1.0 && git push origin v2.1.0
+#   2. Actions tab -> Release -> Run workflow, enter a version (e.g. 2.1.0).
+# The packager builds BDKNeverOvercapRP-<version>.zip, writes a changelog
+# from the commits since the previous tag, and publishes a GitHub release.
+# CurseForge / Wago uploads run too when their secrets and TOC IDs are set.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the leading v, e.g. 2.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+      CF_API_KEY: ${{ secrets.CF_API_KEY }}
+      WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: lunarmodules/luacheck@v1
+
+      - name: Create tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Version must look like 2.1.0 or 2.1.0-beta.1, got '$VERSION'"
+            exit 1
+          fi
+          tag="v$VERSION"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::Tag $tag already exists"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "Release $tag"
+          git push origin "$tag"
+
+      - uses: BigWigsMods/packager@v2
